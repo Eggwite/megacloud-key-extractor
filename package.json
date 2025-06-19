@@ -1,0 +1,28 @@
+{
+  "name": "megacloud-key-extractor",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Eggwite/megacloud-key-extractor.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Eggwite/megacloud-key-extractor/issues"
+  },
+  "dependencies": {
+    "@babel/core": "^7.27.4",
+    "@babel/parser": "^7.27.5",
+    "@babel/traverse": "^7.27.4",
+    "@babel/types": "^7.27.6",
+    "crypto-js": "^4.2.0"
+  },
+  "homepage": "https://github.com/Eggwite/megacloud-key-extractor#readme"
+}

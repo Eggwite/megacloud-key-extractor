@@ -1,0 +1,1869 @@
+//! This is the old version of the key extraction plugin.
+//! It is kept for reference and should not be used in new projects.
+
+/*TODO: 
+  Optimise this plugin to use a single pass, 
+  for now I'm not confident if this is consistent 
+  enough to work reliably in a single pass, so it 
+  uses two passes.
+*/
+
+// --- New Key Extraction Plugin ---
+export const findAndExtractKeyPlugin = (api) => {
+  const { types: t } = api;
+  const DEBUG_SEGMENT_FUNCTIONS = false;
+  const DEBUG_ASSEMBLER_LOGIC = false;
+
+  // Helper function to derive and validate keys from concatenated function calls
+  function deriveAndValidateConcatenatedKey(
+    returnArgumentNode,
+    assemblerFuncName,
+    segmentFunctionsMap
+  ) {
+    if (DEBUG_ASSEMBLER_LOGIC) {
+      console.log(
+        `[Debug Assembler] ENTER deriveAndValidate for ${assemblerFuncName}. Arg type: ${
+          returnArgumentNode ? returnArgumentNode.type : "N/A"
+        }${
+          returnArgumentNode && returnArgumentNode.type === "BinaryExpression"
+            ? `, Operator: '${returnArgumentNode.operator}'`
+            : ""
+        }`
+      );
+    }
+
+    let concatenatedString = "";
+    let isProcessed = false;
+    let involvedSegmentFuncs = [];
+
+    function getStringFromNode(node) {
+      if (DEBUG_ASSEMBLER_LOGIC)
+        console.log(
+          `[Debug Assembler] getStringFromNode for ${assemblerFuncName}: Input node type: ${
+            node ? node.type : "N/A"
+          }`
+        );
+      if (
+        t.isCallExpression(node) &&
+        t.isIdentifier(node.callee) &&
+        segmentFunctionsMap[node.callee.name]
+      ) {
+        const segmentName = node.callee.name;
+        const segmentValue = segmentFunctionsMap[segmentName];
+        if (DEBUG_ASSEMBLER_LOGIC)
+          console.log(
+            `[Debug Assembler] getStringFromNode for ${assemblerFuncName}: Resolved segment '${segmentName}' to '${segmentValue}'`
+          );
+        involvedSegmentFuncs.push(segmentName);
+        return segmentValue;
+      }
+      if (
+        DEBUG_ASSEMBLER_LOGIC &&
+        t.isCallExpression(node) &&
+        t.isIdentifier(node.callee)
+      ) {
+        console.log(
+          `[Debug Assembler] getStringFromNode for ${assemblerFuncName}: Segment Call '${
+            node.callee.name
+          }' NOT FOUND in segmentFunctionsMap. Keys: ${Object.keys(
+            segmentFunctionsMap
+          ).join(", ")}`
+        );
+      } else if (
+        DEBUG_ASSEMBLER_LOGIC &&
+        t.isCallExpression(node) &&
+        !t.isIdentifier(node.callee)
+      ) {
+        console.log(
+          `[Debug Assembler] getStringFromNode for ${assemblerFuncName}: CallExpression callee is not Identifier. Type: ${
+            node.callee ? node.callee.type : "N/A"
+          }`
+        );
+      } else if (
+        DEBUG_ASSEMBLER_LOGIC &&
+        node &&
+        node.type !== "CallExpression"
+      ) {
+        console.log(
+          `[Debug Assembler] getStringFromNode for ${assemblerFuncName}: Node is not a CallExpression. Type: ${node.type}`
+        );
+      } else if (DEBUG_ASSEMBLER_LOGIC) {
+        console.log(
+          `[Debug Assembler] getStringFromNode for ${assemblerFuncName}: Node is not a resolvable CallExpression or other issue.`
+        );
+      }
+      return null;
+    }
+
+    function flattenConcatenation(node) {
+      let parts = [];
+      function traverse(currentNode, depth = 0) {
+        if (DEBUG_ASSEMBLER_LOGIC)
+          console.log(
+            `${"  ".repeat(
+              depth
+            )}[Debug Assembler] flattenConcatenation.traverse for ${assemblerFuncName}: Node type: ${
+              currentNode ? currentNode.type : "N/A"
+            }`
+          );
+        // MODIFIED HERE: Allow '|' as an operator for recursion in flattenConcatenation
+        if (
+          t.isBinaryExpression(currentNode) &&
+          (currentNode.operator === "+" || currentNode.operator === "|")
+        ) {
+          if (DEBUG_ASSEMBLER_LOGIC)
+            console.log(
+              `${"  ".repeat(
+                depth
+              )}[Debug Assembler] flattenConcatenation.traverse for ${assemblerFuncName}: BinaryExpr (${
+                currentNode.operator
+              }). Traversing left then right.`
+            );
+          traverse(currentNode.left, depth + 1);
+          traverse(currentNode.right, depth + 1);
+        } else {
+          if (DEBUG_ASSEMBLER_LOGIC)
+            console.log(
+              `${"  ".repeat(
+                depth
+              )}[Debug Assembler] flattenConcatenation.traverse for ${assemblerFuncName}: Leaf node. Attempting getStringFromNode.`
+            );
+          const part = getStringFromNode(currentNode);
+          if (part === null && DEBUG_ASSEMBLER_LOGIC) {
+            console.log(
+              `${"  ".repeat(
+                depth
+              )}[Debug Assembler] flattenConcatenation.traverse for ${assemblerFuncName}: getStringFromNode returned null for a part (type: ${
+                currentNode ? currentNode.type : "N/A"
+              }).`
+            );
+          }
+          parts.push(part);
+        }
+      }
+      if (DEBUG_ASSEMBLER_LOGIC)
+        console.log(
+          `[Debug Assembler] flattenConcatenation for ${assemblerFuncName}: Initial node type: ${
+            node ? node.type : "N/A"
+          }`
+        );
+      traverse(node);
+      if (DEBUG_ASSEMBLER_LOGIC)
+        console.log(
+          `[Debug Assembler] flattenConcatenation for ${assemblerFuncName}: Resulting parts: ${JSON.stringify(
+            parts
+          )}`
+        );
+      return parts;
+    }
+
+    // MODIFIED HERE: Allow '|' as an operator for concatenation
+    if (
+      returnArgumentNode &&
+      t.isBinaryExpression(returnArgumentNode) &&
+      (returnArgumentNode.operator === "+" ||
+        returnArgumentNode.operator === "|")
+    ) {
+      isProcessed = true;
+      if (DEBUG_ASSEMBLER_LOGIC)
+        console.log(
+          `[Debug Assembler] ${assemblerFuncName}: Arg IS BinaryExpression with '${returnArgumentNode.operator}' operator. Processing...`
+        );
+      const stringParts = flattenConcatenation(returnArgumentNode);
+      if (stringParts.some((p) => p === undefined || p === null)) {
+        if (DEBUG_ASSEMBLER_LOGIC)
+          console.log(
+            `[Debug Assembler] ${assemblerFuncName} (BinaryExpr '${
+              returnArgumentNode.operator
+            }'): flattenConcatenation returned parts with undefined/null: ${JSON.stringify(
+              stringParts
+            )}`
+          );
+        concatenatedString = null;
+      } else {
+        concatenatedString = stringParts.join("");
+        if (DEBUG_ASSEMBLER_LOGIC)
+          console.log(
+            `[Debug Assembler] ${assemblerFuncName} (BinaryExpr '${returnArgumentNode.operator}'): successfully joined parts: '${concatenatedString}'`
+          );
+      }
+    } else if (returnArgumentNode && t.isCallExpression(returnArgumentNode)) {
+      isProcessed = true;
+      if (DEBUG_ASSEMBLER_LOGIC)
+        console.log(
+          `[Debug Assembler] ${assemblerFuncName}: Arg IS CallExpression. Callee type: ${
+            returnArgumentNode.callee ? returnArgumentNode.callee.type : "N/A"
+          }. Processing...`
+        );
+      concatenatedString = getStringFromNode(returnArgumentNode);
+      if (concatenatedString === null && DEBUG_ASSEMBLER_LOGIC) {
+        console.log(
+          `[Debug Assembler] ${assemblerFuncName} (CallExpr): getStringFromNode returned null.`
+        );
+      }
+    } else {
+      if (DEBUG_ASSEMBLER_LOGIC)
+        console.log(
+          `[Debug Assembler] ${assemblerFuncName}: Arg is NOT BinaryExpr(+) or CallExpr. Actual type: ${
+            returnArgumentNode ? returnArgumentNode.type : "N/A"
+          }${
+            returnArgumentNode && returnArgumentNode.type === "BinaryExpression"
+              ? `, Operator: '${returnArgumentNode.operator}'`
+              : ""
+          }. Skipping processing.`
+        );
+    }
+
+    if (DEBUG_ASSEMBLER_LOGIC) {
+      console.log(
+        `[Debug Assembler] PRE-VALIDATION ${assemblerFuncName}: isProcessed=${isProcessed}, derivedString='${concatenatedString}', involvedSegments: ${involvedSegmentFuncs.join(
+          ", "
+        )}`
+      );
+    }
+
+    if (!isProcessed || concatenatedString === null) {
+      if (DEBUG_ASSEMBLER_LOGIC) {
+        if (!isProcessed)
+          console.log(
+            `[Debug Assembler] EXIT ${assemblerFuncName}: Not processed. Returning null.`
+          );
+        else if (concatenatedString === null)
+          console.log(
+            `[Debug Assembler] EXIT ${assemblerFuncName}: Processed, but concatenatedString is null. Returning null.`
+          );
+      }
+      return null;
+    }
+
+    const isHex = /^[0-9a-fA-F]*$/.test(concatenatedString);
+    const expectedLength = 64;
+    if (DEBUG_ASSEMBLER_LOGIC) {
+      console.log(
+        `[Debug Assembler] EXIT ${assemblerFuncName}: Validating derived key. Key='${concatenatedString}', Length=${concatenatedString.length} (expected ${expectedLength}), IsHex=${isHex}`
+      );
+    }
+
+    if (concatenatedString.length === expectedLength) {
+      if (isHex) {
+        return {
+          isValidKey: true,
+          key: concatenatedString,
+          segments: involvedSegmentFuncs,
+          type: "concatenated_functions",
+        };
+      } else {
+        return {
+          isNonHex: true,
+          key: concatenatedString,
+          segments: involvedSegmentFuncs,
+          type: "concatenated_functions",
+        };
+      }
+    } else {
+      return {
+        isWrongLength: true,
+        key: concatenatedString,
+        segments: involvedSegmentFuncs,
+        type: "concatenated_functions",
+      };
+    }
+  }
+
+  return {
+    visitor: {
+      Program(programPath) {
+        const FIND_ALL_CANDIDATES = true;
+        console.time("Key Extraction Time");
+
+        let potentialKeyArrays = {};
+        let foundKeys = [];
+        let nonHexCandidates = [];
+        let wrongLengthCandidates = [];
+
+        // PASS 1: Collect array literals (for map().join('') pattern)
+        const arrayCollectorVisitor = {
+          VariableDeclarator(path) {
+            if (
+              t.isIdentifier(path.node.id) &&
+              t.isArrayExpression(path.node.init)
+            ) {
+              // Store the ArrayExpression node itself
+              potentialKeyArrays[path.node.id.name] = path.node.init;
+              if (DEBUG_SEGMENT_FUNCTIONS) {
+                console.log(
+                  `[Debug ArrayCollector] Collected array: ${path.node.id.name} with ${path.node.init.elements.length} elements.`
+                );
+              }
+            }
+          },
+          AssignmentExpression(path) {
+            if (
+              t.isIdentifier(path.node.left) &&
+              t.isArrayExpression(path.node.right)
+            ) {
+              potentialKeyArrays[path.node.left.name] = path.node.right;
+              if (DEBUG_SEGMENT_FUNCTIONS) {
+                console.log(
+                  `[Debug ArrayCollector] Collected array (via assignment): ${path.node.left.name} with ${path.node.right.elements.length} elements.`
+                );
+              }
+            }
+          },
+        };
+        programPath.traverse(arrayCollectorVisitor);
+
+        // PASS 2: Collect segment functions (for new concatenated_functions pattern)
+        let segmentFunctionsMap = {};
+        let skippedFunctions = {}; // Keep track of functions that couldn't be resolved
+        let debugInfo = {}; // For detailed debug logging of segment function analysis
+
+        // Helper to extract return statements from IF conditions
+        function extractReturnStringFromIfStatement(node) {
+          if (!t.isIfStatement(node)) return null;
+
+          // Check consequent (the "then" part)
+          if (t.isBlockStatement(node.consequent)) {
+            for (let stmt of node.consequent.body) {
+              if (
+                t.isReturnStatement(stmt) &&
+                t.isStringLiteral(stmt.argument)
+              ) {
+                return stmt.argument.value;
+              }
+            }
+          } else if (
+            t.isReturnStatement(node.consequent) &&
+            t.isStringLiteral(node.consequent.argument)
+          ) {
+            return node.consequent.argument.value;
+          }
+
+          // Check alternate (the "else" part)
+          if (node.alternate) {
+            if (t.isBlockStatement(node.alternate)) {
+              for (let stmt of node.alternate.body) {
+                if (
+                  t.isReturnStatement(stmt) &&
+                  t.isStringLiteral(stmt.argument)
+                ) {
+                  return stmt.argument.value;
+                }
+              }
+            } else if (
+              t.isReturnStatement(node.alternate) &&
+              t.isStringLiteral(node.alternate.argument)
+            ) {
+              return node.alternate.argument.value;
+            } else if (t.isIfStatement(node.alternate)) {
+              // Handle nested if statements in else clauses (else if)
+              return extractReturnStringFromIfStatement(node.alternate);
+            }
+          }
+
+          return null;
+        }
+
+        const segmentFunctionCollectorVisitor = {
+          FunctionDeclaration(path) {
+            if (!path.node.id || !path.node.id.name) return;
+
+            const funcName = path.node.id.name;
+            const bodyStmts = path.node.body.body;
+
+            if (segmentFunctionsMap[funcName] || skippedFunctions[funcName])
+              return;
+
+            if (DEBUG_SEGMENT_FUNCTIONS) {
+              debugInfo[funcName] = {
+                type: "FunctionDeclaration",
+                bodyLength: bodyStmts ? bodyStmts.length : 0,
+                hasReturn: false,
+                hasStringReturn: false,
+                nestedIfStatements: 0,
+                returnValue: null,
+              };
+            }
+
+            // Try to find a return statement with a string literal directly in the top level
+            let stringReturnFound = false;
+            if (bodyStmts && bodyStmts.length > 0) {
+              for (let stmt of bodyStmts) {
+                if (t.isReturnStatement(stmt)) {
+                  if (DEBUG_SEGMENT_FUNCTIONS)
+                    debugInfo[funcName].hasReturn = true;
+
+                  if (t.isStringLiteral(stmt.argument)) {
+                    if (DEBUG_SEGMENT_FUNCTIONS) {
+                      debugInfo[funcName].hasStringReturn = true;
+                      debugInfo[funcName].returnValue = stmt.argument.value;
+                    }
+                    segmentFunctionsMap[funcName] = stmt.argument.value;
+                    stringReturnFound = true;
+                    break;
+                  }
+                }
+
+                // Look inside if statements for string returns
+                if (t.isIfStatement(stmt)) {
+                  if (DEBUG_SEGMENT_FUNCTIONS)
+                    debugInfo[funcName].nestedIfStatements++;
+
+                  const returnStr = extractReturnStringFromIfStatement(stmt);
+                  if (returnStr) {
+                    if (DEBUG_SEGMENT_FUNCTIONS) {
+                      debugInfo[funcName].hasStringReturn = true;
+                      debugInfo[funcName].returnValue = returnStr;
+                      debugInfo[funcName].fromIf = true;
+                    }
+                    segmentFunctionsMap[funcName] = returnStr;
+                    stringReturnFound = true;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // If we didn't find a string return in the first pass, try a more aggressive traversal
+            if (!stringReturnFound) {
+              let foundReturn = false;
+              path.traverse({
+                ReturnStatement(returnPath) {
+                  if (foundReturn) return;
+                  if (t.isStringLiteral(returnPath.node.argument)) {
+                    segmentFunctionsMap[funcName] =
+                      returnPath.node.argument.value;
+                    if (DEBUG_SEGMENT_FUNCTIONS) {
+                      debugInfo[funcName].hasStringReturn = true;
+                      debugInfo[funcName].returnValue =
+                        returnPath.node.argument.value;
+                      debugInfo[funcName].fromTraversal = true;
+                    }
+                    foundReturn = true;
+                    returnPath.stop();
+                  }
+                },
+              });
+
+              if (!foundReturn) {
+                skippedFunctions[funcName] = true;
+                if (DEBUG_SEGMENT_FUNCTIONS) {
+                  debugInfo[funcName].skipped = true;
+                }
+              }
+            }
+          },
+
+          // Handles arrow functions and function expressions assigned to variables
+          VariableDeclarator(path) {
+            if (!t.isIdentifier(path.node.id) || !path.node.init) return;
+
+            const funcName = path.node.id.name;
+
+            // Skip if we already processed this function
+            if (segmentFunctionsMap[funcName] || skippedFunctions[funcName])
+              return;
+
+            const funcInit = path.node.init;
+
+            // Initialize debug info
+            if (DEBUG_SEGMENT_FUNCTIONS) {
+              debugInfo[funcName] = {
+                type: t.isArrowFunctionExpression(funcInit)
+                  ? "ArrowFunction"
+                  : t.isFunctionExpression(funcInit)
+                  ? "FunctionExpression"
+                  : "Unknown",
+                hasImplicitReturn:
+                  t.isArrowFunctionExpression(funcInit) &&
+                  !t.isBlockStatement(funcInit.body),
+              };
+            }
+
+            // Handle arrow function with implicit return
+            if (t.isArrowFunctionExpression(funcInit)) {
+              // Case 1: Arrow function with implicit string return: () => "string"
+              if (t.isStringLiteral(funcInit.body)) {
+                segmentFunctionsMap[funcName] = funcInit.body.value;
+                if (DEBUG_SEGMENT_FUNCTIONS) {
+                  debugInfo[funcName].hasStringReturn = true;
+                  debugInfo[funcName].returnValue = funcInit.body.value;
+                }
+                return;
+              }
+
+              // Case 2: Arrow function with block body: () => { ... }
+              if (t.isBlockStatement(funcInit.body)) {
+                const bodyStmts = funcInit.body.body;
+
+                if (DEBUG_SEGMENT_FUNCTIONS) {
+                  debugInfo[funcName].bodyLength = bodyStmts
+                    ? bodyStmts.length
+                    : 0;
+                }
+
+                // First try to find direct returns or conditionals at the top level
+                let stringReturnFound = false;
+                if (bodyStmts && bodyStmts.length > 0) {
+                  for (let stmt of bodyStmts) {
+                    if (t.isReturnStatement(stmt)) {
+                      if (DEBUG_SEGMENT_FUNCTIONS)
+                        debugInfo[funcName].hasReturn = true;
+
+                      if (t.isStringLiteral(stmt.argument)) {
+                        segmentFunctionsMap[funcName] = stmt.argument.value;
+                        if (DEBUG_SEGMENT_FUNCTIONS) {
+                          debugInfo[funcName].hasStringReturn = true;
+                          debugInfo[funcName].returnValue = stmt.argument.value;
+                        }
+                        stringReturnFound = true;
+                        break;
+                      }
+                    }
+
+                    // Look inside if statements for string returns
+                    if (t.isIfStatement(stmt)) {
+                      if (DEBUG_SEGMENT_FUNCTIONS)
+                        debugInfo[funcName].nestedIfStatements++;
+
+                      const returnStr =
+                        extractReturnStringFromIfStatement(stmt);
+                      if (returnStr) {
+                        segmentFunctionsMap[funcName] = returnStr;
+                        if (DEBUG_SEGMENT_FUNCTIONS) {
+                          debugInfo[funcName].hasStringReturn = true;
+                          debugInfo[funcName].returnValue = returnStr;
+                          debugInfo[funcName].fromIf = true;
+                        }
+                        stringReturnFound = true;
+                        break;
+                      }
+                    }
+                  }
+                }
+
+                // If not found at top level, traverse deeper
+                if (!stringReturnFound) {
+                  let foundReturn = false;
+
+                  path.get("init.body").traverse({
+                    ReturnStatement(returnPath) {
+                      if (foundReturn) return;
+
+                      if (t.isStringLiteral(returnPath.node.argument)) {
+                        segmentFunctionsMap[funcName] =
+                          returnPath.node.argument.value;
+                        if (DEBUG_SEGMENT_FUNCTIONS) {
+                          debugInfo[funcName].hasStringReturn = true;
+                          debugInfo[funcName].returnValue =
+                            returnPath.node.argument.value;
+                          debugInfo[funcName].fromTraversal = true;
+                        }
+                        foundReturn = true;
+                        returnPath.stop();
+                      }
+                    },
+                  });
+
+                  if (!foundReturn) {
+                    skippedFunctions[funcName] = true;
+                    if (DEBUG_SEGMENT_FUNCTIONS) {
+                      debugInfo[funcName].skipped = true;
+                    }
+                  }
+                }
+              }
+            } else if (t.isFunctionExpression(funcInit)) {
+              // Function expressions are similar to arrow functions with block bodies
+              const bodyStmts = funcInit.body.body;
+
+              if (DEBUG_SEGMENT_FUNCTIONS) {
+                debugInfo[funcName].bodyLength = bodyStmts
+                  ? bodyStmts.length
+                  : 0;
+              }
+
+              // First try to find direct returns or conditionals at the top level
+              let stringReturnFound = false;
+              if (bodyStmts && bodyStmts.length > 0) {
+                for (let stmt of bodyStmts) {
+                  if (t.isReturnStatement(stmt)) {
+                    if (DEBUG_SEGMENT_FUNCTIONS)
+                      debugInfo[funcName].hasReturn = true;
+
+                    if (t.isStringLiteral(stmt.argument)) {
+                      segmentFunctionsMap[funcName] = stmt.argument.value;
+                      if (DEBUG_SEGMENT_FUNCTIONS) {
+                        debugInfo[funcName].hasStringReturn = true;
+                        debugInfo[funcName].returnValue = stmt.argument.value;
+                      }
+                      stringReturnFound = true;
+                      break;
+                    }
+                  }
+
+                  // Look inside if statements for string returns
+                  if (t.isIfStatement(stmt)) {
+                    if (DEBUG_SEGMENT_FUNCTIONS)
+                      debugInfo[funcName].nestedIfStatements++;
+
+                    const returnStr = extractReturnStringFromIfStatement(stmt);
+                    if (returnStr) {
+                      segmentFunctionsMap[funcName] = returnStr;
+                      if (DEBUG_SEGMENT_FUNCTIONS) {
+                        debugInfo[funcName].hasStringReturn = true;
+                        debugInfo[funcName].returnValue = returnStr;
+                        debugInfo[funcName].fromIf = true;
+                      }
+                      stringReturnFound = true;
+                      break;
+                    }
+                  }
+                }
+              }
+
+              // If not found at top level, traverse deeper
+              if (!stringReturnFound) {
+                let foundReturn = false;
+
+                path.get("init.body").traverse({
+                  ReturnStatement(returnPath) {
+                    if (foundReturn) return;
+
+                    if (t.isStringLiteral(returnPath.node.argument)) {
+                      segmentFunctionsMap[funcName] =
+                        returnPath.node.argument.value;
+                      if (DEBUG_SEGMENT_FUNCTIONS) {
+                        debugInfo[funcName].hasStringReturn = true;
+                        debugInfo[funcName].returnValue =
+                          returnPath.node.argument.value;
+                        debugInfo[funcName].fromTraversal = true;
+                      }
+                      foundReturn = true;
+                      returnPath.stop();
+                    }
+                  },
+                });
+
+                if (!foundReturn) {
+                  skippedFunctions[funcName] = true;
+                  if (DEBUG_SEGMENT_FUNCTIONS) {
+                    debugInfo[funcName].skipped = true;
+                  }
+                }
+              }
+            }
+          },
+        };
+
+        programPath.traverse(segmentFunctionCollectorVisitor);
+
+        programPath.traverse({
+          VariableDeclaration(path) {
+            const declarations = path.node.declarations;
+            if (
+              declarations &&
+              declarations.length === 1 &&
+              t.isIdentifier(declarations[0].id)
+            ) {
+              const varName = declarations[0].id.name;
+              if (declarations[0].init === null) {
+                const parentNode = path.parentPath && path.parentPath.node;
+                // Ensure parentNode and parentNode.body exist and parentNode.body is an array
+                if (
+                  parentNode &&
+                  parentNode.body &&
+                  Array.isArray(parentNode.body)
+                ) {
+                  const parentBody = parentNode.body;
+                  let currentIndex = -1;
+                  // Find the index of the current node in its parent's body statements
+                  for (let i = 0; i < parentBody.length; i++) {
+                    if (parentBody[i] === path.node) {
+                      currentIndex = i;
+                      break;
+                    }
+                  }
+
+                  if (currentIndex >= 0) {
+                    // Look for assignment expressions after this variable declaration
+                    for (let i = currentIndex + 1; i < parentBody.length; i++) {
+                      const stmt = parentBody[i];
+                      if (
+                        t.isExpressionStatement(stmt) &&
+                        t.isAssignmentExpression(stmt.expression) &&
+                        t.isIdentifier(stmt.expression.left, {
+                          name: varName,
+                        }) &&
+                        t.isArrowFunctionExpression(stmt.expression.right)
+                      ) {
+                        const arrowFunc = stmt.expression.right;
+                        if (DEBUG_SEGMENT_FUNCTIONS && !debugInfo[varName])
+                          debugInfo[varName] = {
+                            type: "AssignedArrowFunction",
+                          };
+
+                        if (t.isBlockStatement(arrowFunc.body)) {
+                          for (let bodyStmt of arrowFunc.body.body) {
+                            if (
+                              t.isReturnStatement(bodyStmt) &&
+                              t.isStringLiteral(bodyStmt.argument)
+                            ) {
+                              segmentFunctionsMap[varName] =
+                                bodyStmt.argument.value;
+                              if (
+                                DEBUG_SEGMENT_FUNCTIONS &&
+                                debugInfo[varName]
+                              ) {
+                                debugInfo[varName].hasStringReturn = true;
+                                debugInfo[varName].returnValue =
+                                  bodyStmt.argument.value;
+                              }
+                              break;
+                            }
+                            if (t.isIfStatement(bodyStmt)) {
+                              const returnStr =
+                                extractReturnStringFromIfStatement(bodyStmt);
+                              if (returnStr) {
+                                segmentFunctionsMap[varName] = returnStr;
+                                if (
+                                  DEBUG_SEGMENT_FUNCTIONS &&
+                                  debugInfo[varName]
+                                ) {
+                                  debugInfo[varName].hasStringReturn = true;
+                                  debugInfo[varName].returnValue = returnStr;
+                                  debugInfo[varName].fromIf = true;
+                                }
+                                break;
+                              }
+                            }
+                          }
+                        } else if (t.isStringLiteral(arrowFunc.body)) {
+                          segmentFunctionsMap[varName] = arrowFunc.body.value;
+                          if (DEBUG_SEGMENT_FUNCTIONS && debugInfo[varName]) {
+                            debugInfo[varName].hasImplicitReturn = true;
+                            debugInfo[varName].returnValue =
+                              arrowFunc.body.value;
+                          }
+                        }
+                        break; // Found assignment for this varName, stop looking for more assignments
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+        });
+
+        if (DEBUG_SEGMENT_FUNCTIONS || DEBUG_ASSEMBLER_LOGIC) {
+          console.log("\n--- Pre-Pass 3: Segment Function Map Status ---");
+          const mapKeys = Object.keys(segmentFunctionsMap);
+          console.log(
+            `Total segment functions available for Pass 3: ${mapKeys.length}`
+          );
+          if (mapKeys.length > 0) {
+            // console.log("Available segments:", JSON.stringify(segmentFunctionsMap));
+            console.log("Available segment keys:", mapKeys.join(", "));
+          } else {
+            console.log("No segment functions available for Pass 3.");
+          }
+        }
+
+        // Helper function for validating keys from array joins
+        function validateArrayJoinedKey(
+          keyString,
+          sourceName,
+          type = "array_join"
+        ) {
+          const isHex = /^[0-9a-fA-F]*$/.test(keyString);
+          const expectedLength = 64;
+          if (DEBUG_ASSEMBLER_LOGIC) {
+            console.log(
+              `[Debug ArrayJoin] Validating derived key from '${sourceName}' (${type}). Key='${keyString}', Length=${keyString.length} (expected ${expectedLength}), IsHex=${isHex}`
+            );
+          }
+
+          if (keyString.length === expectedLength) {
+            if (isHex) {
+              return {
+                isValidKey: true,
+                key: keyString,
+                source: sourceName,
+                type: type,
+              };
+            } else {
+              return {
+                isNonHex: true,
+                key: keyString,
+                source: sourceName,
+                type: type,
+              };
+            }
+          } else {
+            return {
+              isWrongLength: true,
+              key: keyString,
+              source: sourceName,
+              type: type,
+            };
+          }
+        } // PASS 3: Find keys using both patterns
+        const keyFinderVisitor = {
+          CallExpression(path) {
+            const callee = path.node.callee;
+            const args = path.node.arguments;
+
+            // --- NEW: Detect String.fromCharCode(...L) and obfuscated variants ---
+            let isFromCharCode = false;
+            let calleeName = null;
+            if (t.isMemberExpression(callee)) {
+              if (
+                t.isIdentifier(callee.object, { name: "String" }) &&
+                (t.isIdentifier(callee.property, { name: "fromCharCode" }) ||
+                  t.isStringLiteral(callee.property, {
+                    value: "fromCharCode",
+                  }) ||
+                  t.isStringLiteral(callee.property, { value: "" }))
+              ) {
+                isFromCharCode = true;
+                calleeName = "String.fromCharCode";
+              } else if (
+                t.isIdentifier(callee.property, { name: "fromCharCode" }) ||
+                t.isStringLiteral(callee.property, { value: "fromCharCode" }) ||
+                t.isStringLiteral(callee.property, { value: "" })
+              ) {
+                isFromCharCode = true;
+                calleeName = "obj.fromCharCode";
+              }
+            } else if (t.isIdentifier(callee, { name: "fromCharCode" })) {
+              isFromCharCode = true;
+              calleeName = "fromCharCode";
+            }
+
+            if (isFromCharCode) {
+              // Look for spread argument: ...L
+              if (args.length === 1 && t.isSpreadElement(args[0])) {
+                const spreadArg = args[0].argument;
+                if (
+                  t.isIdentifier(spreadArg) &&
+                  potentialKeyArrays[spreadArg.name]
+                ) {
+                  const arr = potentialKeyArrays[spreadArg.name];
+                  if (
+                    t.isArrayExpression(arr) &&
+                    arr.elements.every((el) => t.isNumericLiteral(el))
+                  ) {
+                    const key = arr.elements
+                      .map((el) => String.fromCharCode(el.value))
+                      .join("");
+                    if (key.length === 64 && /^[0-9a-fA-F]+$/.test(key)) {
+                      if (
+                        !foundKeys.some(
+                          (fk) =>
+                            fk.key === key && fk.type === "fromCharCode_array"
+                        )
+                      ) {
+                        foundKeys.push({
+                          key,
+                          type: "fromCharCode_array",
+                          source: spreadArg.name,
+                        });
+                      }
+                    } else if (key.length === 64) {
+                      nonHexCandidates.push({
+                        result: key,
+                        type: "fromCharCode_array",
+                        source: spreadArg.name,
+                      });
+                    } else {
+                      wrongLengthCandidates.push({
+                        result: key,
+                        type: "fromCharCode_array",
+                        source: spreadArg.name,
+                        length: key.length,
+                      });
+                    }
+                  }
+                }
+              } else if (
+                args.length > 0 &&
+                args.every((arg) => t.isNumericLiteral(arg))
+              ) {
+                // Handles direct numeric arguments: String.fromCharCode(54, 98, ...)
+                const key = args
+                  .map((el) => String.fromCharCode(el.value))
+                  .join("");
+                if (key.length === 64 && /^[0-9a-fA-F]+$/.test(key)) {
+                  if (
+                    !foundKeys.some(
+                      (fk) => fk.key === key && fk.type === "fromCharCode_args"
+                    )
+                  ) {
+                    foundKeys.push({
+                      key,
+                      type: "fromCharCode_args",
+                      source: calleeName,
+                    });
+                  }
+                } else if (key.length === 64) {
+                  nonHexCandidates.push({
+                    result: key,
+                    type: "fromCharCode_args",
+                    source: calleeName,
+                  });
+                } else {
+                  wrongLengthCandidates.push({
+                    result: key,
+                    type: "fromCharCode_args",
+                    source: calleeName,
+                    length: key.length,
+                  });
+                }
+              }
+            }
+
+            // --- NEW: Detect index-based array mapping pattern ---
+            // Handles: indexArray["map"](o => sourceArray[o])["join"]("")
+            if (
+              t.isMemberExpression(callee) &&
+              (t.isIdentifier(callee.property, { name: "join" }) ||
+                (t.isStringLiteral(callee.property) &&
+                  callee.property.value === "join")) &&
+              args.length === 1 &&
+              t.isStringLiteral(args[0]) &&
+              args[0].value === ""
+            ) {
+              const joinObject = callee.object;
+
+              // Check if this is indexArray.map(callback).join("")
+              if (
+                t.isCallExpression(joinObject) &&
+                t.isMemberExpression(joinObject.callee) &&
+                (t.isIdentifier(joinObject.callee.property, { name: "map" }) ||
+                  (t.isStringLiteral(joinObject.callee.property) &&
+                    joinObject.callee.property.value === "map")) &&
+                t.isIdentifier(joinObject.callee.object) &&
+                joinObject.arguments.length === 1
+              ) {
+                const indexArrayName = joinObject.callee.object.name;
+                const mapCallbackPath = path.get("callee.object.arguments.0");
+                const mapCallbackNode = mapCallbackPath.node;
+
+                let sourceArrayName = null;
+
+                if (
+                  mapCallbackNode &&
+                  (t.isArrowFunctionExpression(mapCallbackNode) ||
+                    t.isFunctionExpression(mapCallbackNode)) &&
+                  mapCallbackNode.params &&
+                  mapCallbackNode.params.length === 1 &&
+                  t.isIdentifier(mapCallbackNode.params[0])
+                ) {
+                  const paramName = mapCallbackNode.params[0].name;
+                  const bodyPath = mapCallbackPath.get("body"); // Path to the body
+                  const bodyNode = bodyPath.node; // Node of the body
+
+                  if (t.isBlockStatement(bodyNode)) {
+                    // Traverse the block statement for a return statement
+                    bodyPath.traverse({
+                      ReturnStatement(returnPath) {
+                        // Ensure this ReturnStatement belongs to the mapCallback itself,
+                        // not a more deeply nested function.
+                        if (
+                          returnPath.getFunctionParent() === mapCallbackPath
+                        ) {
+                          const returnArg = returnPath.node.argument;
+                          if (
+                            t.isMemberExpression(returnArg) &&
+                            t.isIdentifier(returnArg.object) &&
+                            t.isIdentifier(returnArg.property, {
+                              name: paramName,
+                            })
+                          ) {
+                            sourceArrayName = returnArg.object.name;
+                            returnPath.stop(); // Found it, stop traversing this branch
+                          }
+                        }
+                      },
+                    });
+                  } else if (t.isMemberExpression(bodyNode)) {
+                    // Handle implicit return for arrow functions: o => sourceArray[o]
+                    if (
+                      t.isIdentifier(bodyNode.object) &&
+                      t.isIdentifier(bodyNode.property, { name: paramName })
+                    ) {
+                      sourceArrayName = bodyNode.object.name;
+                    }
+                  }
+                }
+
+                if (
+                  sourceArrayName &&
+                  potentialKeyArrays[indexArrayName] &&
+                  potentialKeyArrays[sourceArrayName]
+                ) {
+                  const indexArrayAstNode = potentialKeyArrays[indexArrayName];
+                  const sourceArrayAstNode =
+                    potentialKeyArrays[sourceArrayName];
+
+                  if (
+                    t.isArrayExpression(indexArrayAstNode) &&
+                    t.isArrayExpression(sourceArrayAstNode)
+                  ) {
+                    const areIndicesValidType =
+                      indexArrayAstNode.elements.every(
+                        (el) => t.isNumericLiteral(el) || t.isStringLiteral(el)
+                      );
+                    const areSourceElementsStrings =
+                      sourceArrayAstNode.elements.every((el) =>
+                        t.isStringLiteral(el)
+                      );
+
+                    if (areIndicesValidType && areSourceElementsStrings) {
+                      try {
+                        const indices = indexArrayAstNode.elements.map((el) => {
+                          if (t.isNumericLiteral(el)) return el.value;
+                          if (t.isStringLiteral(el))
+                            return parseInt(el.value, 10);
+                          return NaN;
+                        });
+
+                        const validIndices = indices.filter(
+                          (idx) => !isNaN(idx)
+                        );
+
+                        if (
+                          DEBUG_ASSEMBLER_LOGIC &&
+                          validIndices.length !== indices.length
+                        ) {
+                          console.warn(
+                            `[Debug ArrayJoin] Some string indices in '${indexArrayName}' could not be parsed to valid numbers.`
+                          );
+                        }
+
+                        const sourceStrings = sourceArrayAstNode.elements.map(
+                          (el) => el.value
+                        );
+
+                        const allIndicesInBounds = validIndices.every(
+                          (index) => index >= 0 && index < sourceStrings.length
+                        );
+
+                        if (allIndicesInBounds) {
+                          const derivedKeyString = validIndices
+                            .map((index) => sourceStrings[index])
+                            .join("");
+                          const validationResult = validateArrayJoinedKey(
+                            derivedKeyString,
+                            `${indexArrayName} -> ${sourceArrayName}`,
+                            "indexed_array_map_join"
+                          );
+
+                          if (validationResult) {
+                            if (validationResult.isValidKey) {
+                              if (
+                                !foundKeys.find(
+                                  (k) => k.key === validationResult.key
+                                )
+                              ) {
+                                foundKeys.push(validationResult);
+                              }
+                            } else if (validationResult.isNonHex) {
+                              if (
+                                !nonHexCandidates.find(
+                                  (k) => k.key === validationResult.key
+                                )
+                              ) {
+                                nonHexCandidates.push(validationResult);
+                              }
+                            } else if (validationResult.isWrongLength) {
+                              if (
+                                !wrongLengthCandidates.find(
+                                  (k) => k.key === validationResult.key
+                                )
+                              ) {
+                                wrongLengthCandidates.push(validationResult);
+                              }
+                            }
+                          }
+                        } else {
+                          if (DEBUG_ASSEMBLER_LOGIC) {
+                            console.log(
+                              `[Debug ArrayJoin] Skipped indexed_array_map_join for '${indexArrayName}' -> '${sourceArrayName}': One or more parsed indices are out of bounds for the source array (length ${
+                                sourceStrings.length
+                              }). Indices: ${JSON.stringify(validIndices)}`
+                            );
+                          }
+                        }
+                      } catch (e) {
+                        if (DEBUG_ASSEMBLER_LOGIC) {
+                          console.error(
+                            `[Debug ArrayJoin] Error processing indexed_array_map_join for '${indexArrayName}' -> '${sourceArrayName}':`,
+                            e.toString()
+                          );
+                        }
+                      }
+                    } else {
+                      if (DEBUG_ASSEMBLER_LOGIC) {
+                        let reason = "";
+                        if (!areIndicesValidType)
+                          reason += `Not all elements in index array '${indexArrayName}' are numeric or string literals. `;
+                        if (!areSourceElementsStrings)
+                          reason += `Not all elements in source array '${sourceArrayName}' are string literals.`;
+                        console.log(
+                          `[Debug ArrayJoin] Skipped indexed_array_map_join for '${indexArrayName}' -> '${sourceArrayName}': ${reason.trim()}`
+                        );
+                      }
+                    }
+                  } else {
+                    if (DEBUG_ASSEMBLER_LOGIC) {
+                      console.log(
+                        `[Debug ArrayJoin] Skipped indexed_array_map_join for '${indexArrayName}' -> '${sourceArrayName}': One or both are not ArrayExpressions in potentialKeyArrays.`
+                      );
+                    }
+                  }
+                }
+              }
+            }
+            if (
+              t.isMemberExpression(callee) &&
+              (t.isIdentifier(callee.property, { name: "join" }) ||
+                (t.isStringLiteral(callee.property) &&
+                  callee.property.value === "join")) &&
+              (args.length === 0 ||
+                (args.length === 1 &&
+                  t.isStringLiteral(args[0]) &&
+                  args[0].value === ""))
+            ) {
+              const joinObject = callee.object;
+              let arrayNodeToProcess = null;
+              let sourceName = "unknown_array_source";
+              let processingType = "array_join";
+
+              // Case 1: arrayIdentifier.map(...).join('')
+              if (
+                t.isCallExpression(joinObject) &&
+                t.isMemberExpression(joinObject.callee) &&
+                (t.isIdentifier(joinObject.callee.property, { name: "map" }) ||
+                  (t.isStringLiteral(joinObject.callee.property) &&
+                    joinObject.callee.property.value === "map")) &&
+                t.isIdentifier(joinObject.callee.object)
+              ) {
+                sourceName = joinObject.callee.object.name;
+                arrayNodeToProcess = potentialKeyArrays[sourceName];
+                processingType = "array_map_join";
+
+                if (DEBUG_ASSEMBLER_LOGIC) {
+                  console.log(
+                    `[Debug ArrayJoin] Encountered ${sourceName}.map(...).join(''). Handling assumes map is identity-like or elements are pre-set.`
+                  );
+                }
+                if (
+                  arrayNodeToProcess &&
+                  t.isArrayExpression(arrayNodeToProcess) &&
+                  arrayNodeToProcess.elements.every((el) =>
+                    t.isStringLiteral(el)
+                  )
+                ) {
+                  const derivedKey = arrayNodeToProcess.elements
+                    .map((el) => el.value)
+                    .join("");
+                  const validationResult = validateArrayJoinedKey(
+                    derivedKey,
+                    sourceName,
+                    processingType
+                  );
+                  if (validationResult) {
+                    if (validationResult.isValidKey) {
+                      if (
+                        !foundKeys.some(
+                          (fk) =>
+                            fk.key === validationResult.key &&
+                            fk.type === validationResult.type
+                        )
+                      ) {
+                        foundKeys.push({ ...validationResult });
+                      }
+                      if (!FIND_ALL_CANDIDATES) path.stop();
+                    } else if (validationResult.isNonHex) {
+                      nonHexCandidates.push({
+                        result: validationResult.key,
+                        type: validationResult.type,
+                        source: validationResult.source,
+                      });
+                    } else if (validationResult.isWrongLength) {
+                      wrongLengthCandidates.push({
+                        result: validationResult.key,
+                        type: validationResult.type,
+                        source: validationResult.source,
+                        length: validationResult.key.length,
+                      });
+                    }
+                  }
+                } else if (
+                  arrayNodeToProcess &&
+                  t.isArrayExpression(arrayNodeToProcess)
+                ) {
+                  // Check if this is an index-based mapping pattern
+                  // Pattern: indexArray.map(index => valueArray[index]).join('')
+                  const mapFunction = joinObject.arguments[0];
+
+                  if (DEBUG_ASSEMBLER_LOGIC) {
+                    console.log(
+                      `[Debug ArrayJoin] Array '${sourceName}' for .map.join does not consist entirely of string literals. Checking for index-based mapping pattern.`
+                    );
+                  }
+
+                  // Check if the array contains numeric literals (indices)
+                  if (
+                    arrayNodeToProcess.elements.every((el) =>
+                      t.isNumericLiteral(el)
+                    )
+                  ) {
+                    if (DEBUG_ASSEMBLER_LOGIC) {
+                      console.log(
+                        `[Debug ArrayJoin] Array '${sourceName}' contains numeric indices. Looking for corresponding value array.`
+                      );
+                    } // Try to find the corresponding value array by analyzing the map function
+                    let valueArrayName = null;
+
+                    if (DEBUG_SEGMENT_FUNCTIONS) {
+                      console.log(
+                        `[Debug ArrayJoin] Analyzing map function for '${sourceName}'. Map function type: ${
+                          mapFunction ? mapFunction.type : "N/A"
+                        }`
+                      );
+                    }
+
+                    if (
+                      t.isArrowFunctionExpression(mapFunction) &&
+                      mapFunction.params.length === 1
+                    ) {
+                      const paramName = mapFunction.params[0].name;
+                      const body = mapFunction.body;
+
+                      if (DEBUG_SEGMENT_FUNCTIONS) {
+                        console.log(
+                          `[Debug ArrayJoin] Arrow function param: '${paramName}', body type: ${body.type}`
+                        );
+                      }
+
+                      // Check if body is: valueArray[paramName]
+                      if (
+                        t.isMemberExpression(body) &&
+                        t.isIdentifier(body.object) &&
+                        t.isIdentifier(body.property, { name: paramName })
+                      ) {
+                        valueArrayName = body.object.name;
+                        if (DEBUG_SEGMENT_FUNCTIONS) {
+                          console.log(
+                            `[Debug ArrayJoin] Found direct member expression: ${valueArrayName}[${paramName}]`
+                          );
+                        }
+                      }
+                      // Check if body is a block statement with return valueArray[paramName]
+                      else if (
+                        t.isBlockStatement(body) &&
+                        body.body.length === 1
+                      ) {
+                        const returnStmt = body.body[0];
+                        if (DEBUG_SEGMENT_FUNCTIONS) {
+                          console.log(
+                            `[Debug ArrayJoin] Block statement with return. Return statement type: ${
+                              returnStmt ? returnStmt.type : "N/A"
+                            }`
+                          );
+                          if (returnStmt && returnStmt.argument) {
+                            console.log(
+                              `[Debug ArrayJoin] Return statement argument type: ${returnStmt.argument.type}`
+                            );
+                          }
+                        }
+                        if (
+                          t.isReturnStatement(returnStmt) &&
+                          t.isMemberExpression(returnStmt.argument) &&
+                          t.isIdentifier(returnStmt.argument.object) &&
+                          t.isIdentifier(returnStmt.argument.property, {
+                            name: paramName,
+                          })
+                        ) {
+                          valueArrayName = returnStmt.argument.object.name;
+                          if (DEBUG_SEGMENT_FUNCTIONS) {
+                            console.log(
+                              `[Debug ArrayJoin] Found block return member expression: ${valueArrayName}[${paramName}]`
+                            );
+                          }
+                        } else if (DEBUG_SEGMENT_FUNCTIONS) {
+                          console.log(
+                            `[Debug ArrayJoin] Block return statement doesn't match expected pattern`
+                          );
+                        }
+                      } else if (DEBUG_SEGMENT_FUNCTIONS) {
+                        console.log(
+                          `[Debug ArrayJoin] Map function body doesn't match expected patterns`
+                        );
+                      }
+                    } else if (DEBUG_SEGMENT_FUNCTIONS) {
+                      console.log(
+                        `[Debug ArrayJoin] Map function is not an arrow function or has wrong param count`
+                      );
+                    }
+
+                    if (valueArrayName && potentialKeyArrays[valueArrayName]) {
+                      const valueArray = potentialKeyArrays[valueArrayName];
+                      const indices = arrayNodeToProcess.elements.map(
+                        (el) => el.value
+                      );
+
+                      if (DEBUG_ASSEMBLER_LOGIC) {
+                        console.log(
+                          `[Debug ArrayJoin] Found value array '${valueArrayName}'. Mapping indices: [${indices.join(
+                            ", "
+                          )}]`
+                        );
+                      }
+
+                      if (
+                        t.isArrayExpression(valueArray) &&
+                        valueArray.elements.every((el) => t.isStringLiteral(el))
+                      ) {
+                        // Build the key by mapping indices to values
+                        const mappedValues = indices.map((index) => {
+                          if (
+                            index >= 0 &&
+                            index < valueArray.elements.length
+                          ) {
+                            return valueArray.elements[index].value;
+                          }
+                          return null;
+                        });
+
+                        if (mappedValues.every((val) => val !== null)) {
+                          const derivedKey = mappedValues.join("");
+
+                          if (DEBUG_ASSEMBLER_LOGIC) {
+                            console.log(
+                              `[Debug ArrayJoin] Successfully mapped indices to create key: '${derivedKey}'`
+                            );
+                          }
+
+                          const validationResult = validateArrayJoinedKey(
+                            derivedKey,
+                            `${sourceName}→${valueArrayName}`,
+                            "index_based_array_map_join"
+                          );
+
+                          if (validationResult) {
+                            if (validationResult.isValidKey) {
+                              if (
+                                !foundKeys.some(
+                                  (fk) =>
+                                    fk.key === validationResult.key &&
+                                    fk.type === validationResult.type
+                                )
+                              ) {
+                                foundKeys.push({ ...validationResult });
+                              }
+                              if (!FIND_ALL_CANDIDATES) path.stop();
+                            } else if (validationResult.isNonHex) {
+                              nonHexCandidates.push({
+                                result: validationResult.key,
+                                type: validationResult.type,
+                                source: validationResult.source,
+                              });
+                            } else if (validationResult.isWrongLength) {
+                              wrongLengthCandidates.push({
+                                result: validationResult.key,
+                                type: validationResult.type,
+                                source: validationResult.source,
+                                length: validationResult.key.length,
+                              });
+                            }
+                          }
+                        } else {
+                          if (DEBUG_ASSEMBLER_LOGIC) {
+                            console.log(
+                              `[Debug ArrayJoin] Some indices in '${sourceName}' are out of bounds for value array '${valueArrayName}'`
+                            );
+                          }
+                        }
+                      } else {
+                        if (DEBUG_ASSEMBLER_LOGIC) {
+                          console.log(
+                            `[Debug ArrayJoin] Value array '${valueArrayName}' does not contain all string literals`
+                          );
+                        }
+                      }
+                    } else {
+                      if (DEBUG_ASSEMBLER_LOGIC) {
+                        console.log(
+                          `[Debug ArrayJoin] Could not identify value array for index-based mapping from '${sourceName}'`
+                        );
+                      }
+                    }
+                  } else {
+                    if (DEBUG_ASSEMBLER_LOGIC) {
+                      console.log(
+                        `[Debug ArrayJoin] Array '${sourceName}' elements are not all numeric literals`
+                      );
+                    }
+                  }
+                }
+              }
+              // Case 2: arrayIdentifier.join('')
+              else if (t.isIdentifier(joinObject)) {
+                sourceName = joinObject.name;
+                arrayNodeToProcess = potentialKeyArrays[sourceName];
+                processingType = "direct_array_join";
+
+                if (
+                  arrayNodeToProcess &&
+                  t.isArrayExpression(arrayNodeToProcess)
+                ) {
+                  if (DEBUG_ASSEMBLER_LOGIC) {
+                    console.log(
+                      `[Debug ArrayJoin] Processing direct join on array '${sourceName}'. Element count: ${arrayNodeToProcess.elements.length}`
+                    );
+                  }
+                  if (
+                    arrayNodeToProcess.elements.every((el) =>
+                      t.isStringLiteral(el)
+                    )
+                  ) {
+                    const derivedKey = arrayNodeToProcess.elements
+                      .map((el) => el.value)
+                      .join("");
+                    const validationResult = validateArrayJoinedKey(
+                      derivedKey,
+                      sourceName,
+                      processingType
+                    );
+                    if (validationResult) {
+                      if (validationResult.isValidKey) {
+                        if (
+                          !foundKeys.some(
+                            (fk) =>
+                              fk.key === validationResult.key &&
+                              fk.type === validationResult.type
+                          )
+                        ) {
+                          foundKeys.push({ ...validationResult });
+                        }
+                        if (!FIND_ALL_CANDIDATES) path.stop();
+                      } else if (validationResult.isNonHex) {
+                        nonHexCandidates.push({
+                          result: validationResult.key,
+                          type: validationResult.type,
+                          source: validationResult.source,
+                        });
+                      } else if (validationResult.isWrongLength) {
+                        wrongLengthCandidates.push({
+                          result: validationResult.key,
+                          type: validationResult.type,
+                          source: validationResult.source,
+                          length: validationResult.key.length,
+                        });
+                      }
+                    }
+                  } else if (DEBUG_ASSEMBLER_LOGIC) {
+                    console.log(
+                      `[Debug ArrayJoin] Array '${sourceName}' for direct join does not consist entirely of string literals.`
+                    );
+                  }
+                } else if (DEBUG_ASSEMBLER_LOGIC) {
+                  console.log(
+                    `[Debug ArrayJoin] Array '${sourceName}' for direct join not found in potentialKeyArrays or not an ArrayExpression.`
+                  );
+                }
+              }
+            }
+          },
+          FunctionDeclaration(path) {
+            // For concatenated_functions pattern (assembler function)
+            const funcNode = path.node;
+            const funcName = funcNode.id
+              ? funcNode.id.name
+              : "anonymousFunction_decl";
+            if (DEBUG_ASSEMBLER_LOGIC) {
+              console.log(
+                `[Debug Assembler] Visiting FunctionDeclaration for potential assembler function: ${funcName}`
+              );
+            }
+
+            if (funcNode.body && t.isBlockStatement(funcNode.body)) {
+              if (DEBUG_ASSEMBLER_LOGIC) {
+                console.log(
+                  `[Debug Assembler] Function ${funcName} (decl) has BlockStatement body. Traversing for ReturnStatements...`
+                );
+              }
+              path.get("body").traverse({
+                ReturnStatement(returnPath) {
+                  if (DEBUG_ASSEMBLER_LOGIC) {
+                    console.log(
+                      `[Debug Assembler] Potential assembler (func decl): ${funcName}. Found ReturnStatement. Arg type: ${
+                        returnPath.node.argument
+                          ? returnPath.node.argument.type
+                          : "N/A"
+                      }`
+                    );
+                    if (
+                      returnPath.node.argument &&
+                      returnPath.node.argument.type === "BinaryExpression"
+                    ) {
+                      console.log(
+                        `[Debug Assembler] ${funcName} (decl) Return Arg Operator (Binary): '${returnPath.node.argument.operator}'`
+                      );
+                    }
+                  }
+                  const result = deriveAndValidateConcatenatedKey(
+                    returnPath.node.argument,
+                    funcName,
+                    segmentFunctionsMap
+                  );
+                  if (result) {
+                    if (result.isValidKey) {
+                      if (
+                        !foundKeys.some(
+                          (fk) =>
+                            fk.key === result.key && fk.type === result.type
+                        )
+                      ) {
+                        foundKeys.push({ ...result, name: funcName });
+                      }
+                      if (!FIND_ALL_CANDIDATES) path.stop(); // Stop programPath traversal
+                    } else if (result.isNonHex) {
+                      nonHexCandidates.push({
+                        result: result.key,
+                        type: result.type,
+                        name: funcName,
+                        segments: result.segments,
+                      });
+                    } else if (result.isWrongLength) {
+                      wrongLengthCandidates.push({
+                        result: result.key,
+                        type: result.type,
+                        name: funcName,
+                        segments: result.segments,
+                        length: result.key.length,
+                      });
+                    }
+                  }
+                },
+              });
+            } else if (DEBUG_ASSEMBLER_LOGIC) {
+              console.log(
+                `[Debug Assembler] Function ${funcName} (decl) does not have a BlockStatement body. Type: ${
+                  funcNode.body ? funcNode.body.type : "N/A"
+                }. Skipping ReturnStatement traversal.`
+              );
+            }
+          },
+          VariableDeclarator(path) {
+            const funcInitNode = path.node.init;
+            const varName =
+              path.node.id && t.isIdentifier(path.node.id)
+                ? path.node.id.name
+                : "anonymousVariableFunction";
+
+            if (DEBUG_ASSEMBLER_LOGIC) {
+              console.log(
+                `[Debug Assembler] Visiting VariableDeclarator for potential assembler function: ${varName}`
+              );
+            }
+
+            if (
+              funcInitNode &&
+              (t.isArrowFunctionExpression(funcInitNode) ||
+                t.isFunctionExpression(funcInitNode))
+            ) {
+              if (DEBUG_SEGMENT_FUNCTIONS) {
+                console.log(
+                  `[Debug Assembler] Function ${varName} (var decl) has body type: ${
+                    funcInitNode.body ? funcInitNode.body.type : "N/A"
+                  }`
+                );
+              }
+
+              if (t.isBlockStatement(funcInitNode.body)) {
+                if (DEBUG_SEGMENT_FUNCTIONS) {
+                  console.log(
+                    `[Debug Assembler] Function ${varName} (var decl) has BlockStatement body. Traversing for ReturnStatements...`
+                  );
+                }
+                path.get("init.body").traverse({
+                  ReturnStatement(returnPath) {
+                    if (DEBUG_SEGMENT_FUNCTIONS) {
+                      console.log(
+                        `[Debug Assembler] Potential assembler (var decl block): ${varName}. Found ReturnStatement. Arg type: ${
+                          returnPath.node.argument
+                            ? returnPath.node.argument.type
+                            : "N/A"
+                        }`
+                      );
+                      if (
+                        returnPath.node.argument &&
+                        returnPath.node.argument.type === "BinaryExpression"
+                      ) {
+                        console.log(
+                          `[Debug Assembler] ${varName} (var decl block) Return Arg Operator (Binary): '${returnPath.node.argument.operator}'`
+                        );
+                      }
+                    }
+                    const result = deriveAndValidateConcatenatedKey(
+                      returnPath.node.argument,
+                      varName,
+                      segmentFunctionsMap
+                    );
+                    if (result) {
+                      if (result.isValidKey) {
+                        if (
+                          !foundKeys.some(
+                            (fk) =>
+                              fk.key === result.key && fk.type === result.type
+                          )
+                        ) {
+                          foundKeys.push({ ...result, name: varName });
+                        }
+                        if (!FIND_ALL_CANDIDATES) programPath.stop();
+                      } else if (result.isNonHex) {
+                        nonHexCandidates.push({
+                          result: result.key,
+                          type: result.type,
+                          name: varName,
+                          segments: result.segments,
+                        });
+                      } else if (result.isWrongLength) {
+                        wrongLengthCandidates.push({
+                          result: result.key,
+                          type: result.type,
+                          name: varName,
+                          segments: result.segments,
+                          length: result.key.length,
+                        });
+                      }
+                    }
+                  },
+                });
+              } else if (funcInitNode.body) {
+                // Implicit return for arrow functions
+                if (DEBUG_SEGMENT_FUNCTIONS) {
+                  console.log(
+                    `[Debug Assembler] Function ${varName} (var decl) has implicit return (body type: ${funcInitNode.body.type}). Processing body directly.`
+                  );
+                  if (funcInitNode.body.type === "BinaryExpression") {
+                    console.log(
+                      `[Debug Assembler] ${varName} (var decl implicit) Return Arg Operator (Binary): '${funcInitNode.body.operator}'`
+                    );
+                  }
+                }
+                const result = deriveAndValidateConcatenatedKey(
+                  funcInitNode.body,
+                  varName,
+                  segmentFunctionsMap
+                );
+                if (result) {
+                  if (result.isValidKey) {
+                    if (
+                      !foundKeys.some(
+                        (fk) => fk.key === result.key && fk.type === result.type
+                      )
+                    ) {
+                      foundKeys.push({ ...result, name: varName });
+                    }
+                    if (!FIND_ALL_CANDIDATES) programPath.stop();
+                  } else if (result.isNonHex) {
+                    nonHexCandidates.push({
+                      result: result.key,
+                      type: result.type,
+                      name: varName,
+                      segments: result.segments,
+                    });
+                  } else if (result.isWrongLength) {
+                    wrongLengthCandidates.push({
+                      result: result.key,
+                      type: result.type,
+                      name: varName,
+                      segments: result.segments,
+                      length: result.key.length,
+                    });
+                  }
+                }
+              }
+            }
+          },
+          AssignmentExpression(path) {
+            const assignLeft = path.node.left;
+            const assignRight = path.node.right;
+
+            if (
+              t.isIdentifier(assignLeft) &&
+              (t.isArrowFunctionExpression(assignRight) ||
+                t.isFunctionExpression(assignRight))
+            ) {
+              const funcName = assignLeft.name;
+              const funcNode = assignRight;
+
+              if (DEBUG_ASSEMBLER_LOGIC) {
+                console.log(
+                  `[Debug Assembler] Visiting AssignmentExpression for potential assembler function: ${funcName}`
+                );
+                console.log(
+                  `[Debug Assembler] Function ${funcName} (assign) has body type: ${
+                    funcNode.body ? funcNode.body.type : "N/A"
+                  }`
+                );
+              }
+
+              if (t.isBlockStatement(funcNode.body)) {
+                if (DEBUG_ASSEMBLER_LOGIC) {
+                  console.log(
+                    `[Debug Assembler] Function ${funcName} (assign) has BlockStatement body. Traversing for ReturnStatements...`
+                  );
+                }
+                // Important: Need to get the path to the function body for traversal
+                // path.get('right.body') refers to the ArrowFunctionExpression's body within the AssignmentExpression
+                path.get("right.body").traverse({
+                  ReturnStatement(returnPath) {
+                    if (DEBUG_ASSEMBLER_LOGIC) {
+                      console.log(
+                        `[Debug Assembler] Potential assembler (assign block): ${funcName}. Found ReturnStatement. Arg type: ${
+                          returnPath.node.argument
+                            ? returnPath.node.argument.type
+                            : "N/A"
+                        }`
+                      );
+                      if (
+                        returnPath.node.argument &&
+                        returnPath.node.argument.type === "BinaryExpression"
+                      ) {
+                        console.log(
+                          `[Debug Assembler] ${funcName} (assign block) Return Arg Operator (Binary): '${returnPath.node.argument.operator}'`
+                        );
+                      }
+                    }
+                    const result = deriveAndValidateConcatenatedKey(
+                      returnPath.node.argument,
+                      funcName,
+                      segmentFunctionsMap
+                    );
+                    if (result) {
+                      if (result.isValidKey) {
+                        if (
+                          !foundKeys.some(
+                            (fk) =>
+                              fk.key === result.key && fk.type === result.type
+                          )
+                        ) {
+                          foundKeys.push({ ...result, name: funcName });
+                        }
+                        if (!FIND_ALL_CANDIDATES) programPath.stop();
+                      } else if (result.isNonHex) {
+                        nonHexCandidates.push({
+                          result: result.key,
+                          type: result.type,
+                          name: funcName,
+                          segments: result.segments,
+                        });
+                      } else if (result.isWrongLength) {
+                        wrongLengthCandidates.push({
+                          result: result.key,
+                          type: result.type,
+                          name: funcName,
+                          segments: result.segments,
+                          length: result.key.length,
+                        });
+                      }
+                    }
+                  },
+                });
+              } else if (funcNode.body) {
+                // Implicit return for arrow functions
+                if (DEBUG_ASSEMBLER_LOGIC) {
+                  console.log(
+                    `[Debug Assembler] Function ${funcName} (assign) has implicit return (body type: ${funcNode.body.type}). Processing body directly.`
+                  );
+                  if (funcNode.body.type === "BinaryExpression") {
+                    console.log(
+                      `[Debug Assembler] ${funcName} (assign implicit) Return Arg Operator (Binary): '${funcNode.body.operator}'`
+                    );
+                  }
+                }
+                const result = deriveAndValidateConcatenatedKey(
+                  funcNode.body, // The body itself is the returned expression
+                  funcName,
+                  segmentFunctionsMap
+                );
+                if (result) {
+                  if (result.isValidKey) {
+                    if (
+                      !foundKeys.some(
+                        (fk) => fk.key === result.key && fk.type === result.type
+                      )
+                    ) {
+                      foundKeys.push({ ...result, name: funcName });
+                    }
+                    if (!FIND_ALL_CANDIDATES) programPath.stop();
+                  } else if (result.isNonHex) {
+                    nonHexCandidates.push({
+                      result: result.key,
+                      type: result.type,
+                      name: funcName,
+                      segments: result.segments,
+                    });
+                  } else if (result.isWrongLength) {
+                    wrongLengthCandidates.push({
+                      result: result.key,
+                      type: result.type,
+                      name: funcName,
+                      segments: result.segments,
+                      length: result.key.length,
+                    });
+                  }
+                }
+              }
+            }
+          },
+        };
+        programPath.traverse(keyFinderVisitor);
+
+        if (foundKeys.length > 0) {
+          if (FIND_ALL_CANDIDATES || foundKeys.length === 1) {
+            console.log(
+              `--- Found ${foundKeys.length} Potential AES Key(s) ---`
+            );
+            foundKeys.forEach((item, idx) => {
+              console.log(`\n--- Candidate Key ${idx + 1} ---`);
+              console.log("Derived Key:", item.key);
+              if (item.segments) {
+                console.log("Involved Segments:", item.segments.join(", "));
+              }
+              console.log("Key Type:", item.type);
+            });
+          } else {
+            console.log(
+              `--- Found ${foundKeys.length} Potential AES Keys (not all candidates shown) ---`
+            );
+          }
+        } else {
+          console.log("--- AES Key Not Found ---");
+          // If key not found, and we were debugging, print the segment map again for final check
+          if (DEBUG_ASSEMBLER_LOGIC) {
+            console.log(
+              "\n--- Post-Pass 3: Segment Function Map (AES Key Not Found) ---"
+            );
+            const mapKeys = Object.keys(segmentFunctionsMap);
+            console.log(
+              `Total segment functions that were available: ${mapKeys.length}`
+            );
+            if (mapKeys.length > 0) {
+              console.log("Available segment keys were:", mapKeys.join(", "));
+            }
+          }
+        }
+
+        console.timeEnd("Key Extraction Time");
+      },
+    },
+  };
+};

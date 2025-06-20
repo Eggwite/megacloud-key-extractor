@@ -3,7 +3,7 @@
 
 let DEBUG = false; // Toggle this variable to enable/disable logs
 
-export const setDebug = (value) => {
+export const setDebug = value => {
   DEBUG = value;
 };
 
@@ -22,5 +22,5 @@ export const error = (...args) => {
 export const debug = {
   log,
   warn,
-  error,
+  error
 };

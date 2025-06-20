@@ -3,6 +3,7 @@
  */
 
 const VALID_KEY_LENGTHS = [16, 24, 32, 48, 51, 64];
+//I saw that some services used different key lengths, but not certain if anything other than 64 is valid.
 
 /**
  * Validates a potential AES key
@@ -11,7 +12,7 @@ const VALID_KEY_LENGTHS = [16, 24, 32, 48, 51, 64];
  * @param {string} type - Type of key extraction method
  * @returns {Object|null} Validation result
  */
-export function validateKey(keyString, sourceName, type = "unknown") {
+export function validateKey(keyString, sourceName, type = 'unknown') {
   const isHex = /^[0-9a-fA-F]*$/.test(keyString);
   const isValidLength = VALID_KEY_LENGTHS.includes(keyString.length);
 
@@ -21,14 +22,14 @@ export function validateKey(keyString, sourceName, type = "unknown") {
         isValidKey: true,
         key: keyString,
         source: sourceName,
-        type: type,
+        type: type
       };
     } else {
       return {
         isNonHex: true,
         key: keyString,
         source: sourceName,
-        type: type,
+        type: type
       };
     }
   } else {
@@ -38,7 +39,7 @@ export function validateKey(keyString, sourceName, type = "unknown") {
       source: sourceName,
       type: type,
       actualLength: keyString.length,
-      expectedLength: VALID_KEY_LENGTHS,
+      expectedLength: VALID_KEY_LENGTHS
     };
   }
 }
@@ -50,11 +51,7 @@ export function validateKey(keyString, sourceName, type = "unknown") {
  * @param {Array} involvedSegmentFuncs - Array of involved segment function names
  * @returns {Object|null} Validation result
  */
-export function validateConcatenatedKey(
-  concatenatedString,
-  assemblerFuncName,
-  involvedSegmentFuncs
-) {
+export function validateConcatenatedKey(concatenatedString, assemblerFuncName, involvedSegmentFuncs) {
   if (!concatenatedString) return null;
 
   const isHex = /^[0-9a-fA-F]*$/.test(concatenatedString);
@@ -66,16 +63,16 @@ export function validateConcatenatedKey(
         isValidKey: true,
         key: concatenatedString,
         segments: involvedSegmentFuncs,
-        type: "concatenated_functions",
-        source: assemblerFuncName,
+        type: 'concatenated_functions',
+        source: assemblerFuncName
       };
     } else {
       return {
         isNonHex: true,
         key: concatenatedString,
         segments: involvedSegmentFuncs,
-        type: "concatenated_functions",
-        source: assemblerFuncName,
+        type: 'concatenated_functions',
+        source: assemblerFuncName
       };
     }
   } else {
@@ -83,10 +80,10 @@ export function validateConcatenatedKey(
       isWrongLength: true,
       key: concatenatedString,
       segments: involvedSegmentFuncs,
-      type: "concatenated_functions",
+      type: 'concatenated_functions',
       source: assemblerFuncName,
       actualLength: concatenatedString.length,
-      expectedLength: VALID_KEY_LENGTHS,
+      expectedLength: VALID_KEY_LENGTHS
     };
   }
 }

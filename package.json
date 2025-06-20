@@ -1,7 +1,7 @@
 {
   "name": "megacloud-key-extractor",
   "version": "1.0.0",
-  "description": "",
+  "description": "Pattern matching tool for extracting keys from obfuscated JavaScript files",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -11,9 +11,9 @@
     "url": "git+https://github.com/Eggwite/megacloud-key-extractor.git"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "author": "Eggwite",
+  "license": "AGPL-3.0",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/Eggwite/megacloud-key-extractor/issues"
   },

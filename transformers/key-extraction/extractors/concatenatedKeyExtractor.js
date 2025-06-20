@@ -1,5 +1,5 @@
-import { debugLoggers } from "../config/debug.js";
-import { validateConcatenatedKey } from "../validators/keyValidator.js";
+import { debugLoggers } from '../config/debug.js';
+import { validateConcatenatedKey } from '../validators/keyValidator.js';
 
 /**
  * Handles the extraction of concatenated keys from function calls
@@ -31,21 +31,15 @@ export class ConcatenatedKeyExtractor {
     }
     for (const stmt of blockNode.body) {
       if (t.isReturnStatement(stmt) && t.isStringLiteral(stmt.argument)) {
-        this.debug.log(
-          `_findStringReturnInBlock: Found direct return: ${stmt.argument.value}`
-        );
+        this.debug.log(`_findStringReturnInBlock: Found direct return: ${stmt.argument.value}`);
         return stmt.argument.value;
       }
       if (t.isIfStatement(stmt)) {
-        this.debug.log(
-          "_findStringReturnInBlock: Checking IfStatement consequent."
-        );
+        this.debug.log('_findStringReturnInBlock: Checking IfStatement consequent.');
         let returned = this._findStringReturnInBlock(stmt.consequent);
         if (returned) return returned;
         if (stmt.alternate) {
-          this.debug.log(
-            "_findStringReturnInBlock: Checking IfStatement alternate."
-          );
+          this.debug.log('_findStringReturnInBlock: Checking IfStatement alternate.');
           returned = this._findStringReturnInBlock(stmt.alternate);
           if (returned) return returned;
         }
@@ -84,15 +78,15 @@ export class ConcatenatedKeyExtractor {
 
     this.debug.log(
       `ENTER deriveAndValidate for ${assemblerFuncName}. Arg type: ${
-        returnArgumentNode ? returnArgumentNode.type : "N/A"
+        returnArgumentNode ? returnArgumentNode.type : 'N/A'
       }${
-        returnArgumentNode && returnArgumentNode.type === "BinaryExpression"
+        returnArgumentNode && returnArgumentNode.type === 'BinaryExpression'
           ? `, Operator: '${returnArgumentNode.operator}'`
-          : ""
+          : ''
       }`
     );
 
-    let concatenatedString = "";
+    let concatenatedString = '';
     let isProcessed = false;
     let involvedSegmentFuncs = [];
 
@@ -100,30 +94,23 @@ export class ConcatenatedKeyExtractor {
     if (
       returnArgumentNode &&
       t.isBinaryExpression(returnArgumentNode) &&
-      (returnArgumentNode.operator === "+" ||
-        returnArgumentNode.operator === "|")
+      (returnArgumentNode.operator === '+' || returnArgumentNode.operator === '|')
     ) {
       isProcessed = true;
       this.debug.log(
         `${assemblerFuncName}: Arg IS BinaryExpression with '${returnArgumentNode.operator}' operator. Processing...`
       );
 
-      const stringParts = this.flattenConcatenation(
-        returnArgumentNode,
-        assemblerFuncName,
-        t
-      );
-      if (stringParts.some((p) => p === undefined || p === null)) {
+      const stringParts = this.flattenConcatenation(returnArgumentNode, assemblerFuncName, t);
+      if (stringParts.some(p => p === undefined || p === null)) {
         this.debug.log(
           `${assemblerFuncName} (BinaryExpr '${
             returnArgumentNode.operator
-          }'): flattenConcatenation returned parts with undefined/null: ${JSON.stringify(
-            stringParts
-          )}`
+          }'): flattenConcatenation returned parts with undefined/null: ${JSON.stringify(stringParts)}`
         );
         concatenatedString = null;
       } else {
-        concatenatedString = stringParts.join("");
+        concatenatedString = stringParts.join('');
         involvedSegmentFuncs = this.getInvolvedSegments(stringParts);
         this.debug.log(
           `${assemblerFuncName} (BinaryExpr '${returnArgumentNode.operator}'): successfully joined parts: '${concatenatedString}'`
@@ -135,57 +122,45 @@ export class ConcatenatedKeyExtractor {
       isProcessed = true;
       this.debug.log(
         `${assemblerFuncName}: Arg IS CallExpression. Callee type: ${
-          returnArgumentNode.callee ? returnArgumentNode.callee.type : "N/A"
+          returnArgumentNode.callee ? returnArgumentNode.callee.type : 'N/A'
         }. Processing...`
       );
 
-      const result = this.getStringFromNode(
-        returnArgumentNode,
-        assemblerFuncName,
-        t
-      );
+      const result = this.getStringFromNode(returnArgumentNode, assemblerFuncName, t);
       concatenatedString = result.value;
       involvedSegmentFuncs = result.segments;
 
       if (concatenatedString === null) {
-        this.debug.log(
-          `${assemblerFuncName} (CallExpr): getStringFromNode returned null.`
-        );
+        this.debug.log(`${assemblerFuncName} (CallExpr): getStringFromNode returned null.`);
       }
     } else {
       this.debug.log(
         `${assemblerFuncName}: Arg is NOT BinaryExpr(+|) or CallExpr. Actual type: ${
-          returnArgumentNode ? returnArgumentNode.type : "N/A"
+          returnArgumentNode ? returnArgumentNode.type : 'N/A'
         }${
-          returnArgumentNode && returnArgumentNode.type === "BinaryExpression"
+          returnArgumentNode && returnArgumentNode.type === 'BinaryExpression'
             ? `, Operator: '${returnArgumentNode.operator}'`
-            : ""
+            : ''
         }. Skipping processing.`
       );
     }
 
     this.debug.log(
       `PRE-VALIDATION ${assemblerFuncName}: isProcessed=${isProcessed}, derivedString='${concatenatedString}', involvedSegments: ${involvedSegmentFuncs.join(
-        ", "
+        ', '
       )}`
     );
 
     if (!isProcessed || concatenatedString === null) {
       this.debug.log(
         `EXIT ${assemblerFuncName}: ${
-          !isProcessed
-            ? "Not processed"
-            : "Processed, but concatenatedString is null"
+          !isProcessed ? 'Not processed' : 'Processed, but concatenatedString is null'
         }. Returning null.`
       );
       return null;
     }
 
-    const result = validateConcatenatedKey(
-      concatenatedString,
-      assemblerFuncName,
-      involvedSegmentFuncs
-    );
+    const result = validateConcatenatedKey(concatenatedString, assemblerFuncName, involvedSegmentFuncs);
 
     this.debug.log(
       `EXIT ${assemblerFuncName}: Validating derived key. Key='${concatenatedString}', Length=${
@@ -197,7 +172,6 @@ export class ConcatenatedKeyExtractor {
   }
 
   /**
-   * Enhanced: Track object property assignments for use in key extraction
    * Call this from the main plugin to register object property assignments.
    */
   setObjectPropertiesMap(objectPropertiesMap) {
@@ -214,28 +188,17 @@ export class ConcatenatedKeyExtractor {
    */
   getStringFromNode(node, assemblerFuncName, t, parentNode = null) {
     t = t || this.t;
-    this.debug.log(
-      `getStringFromNode for ${assemblerFuncName}: Input node type: ${
-        node ? node.type : "N/A"
-      }`
-    );
+    this.debug.log(`getStringFromNode for ${assemblerFuncName}: Input node type: ${node ? node.type : 'N/A'}`);
 
     // New: Handle direct MemberExpression (e.g., S["a"])
     if (
       t.isMemberExpression(node) &&
-      !t.isCallExpression(
-        parentNode
-      ) /* Check parent to avoid double processing if it's a callee */
+      !t.isCallExpression(parentNode) /* Check parent to avoid double processing if it's a callee */
     ) {
-      if (
-        t.isIdentifier(node.object) &&
-        (t.isStringLiteral(node.property) || t.isIdentifier(node.property))
-      ) {
+      if (t.isIdentifier(node.object) && (t.isStringLiteral(node.property) || t.isIdentifier(node.property))) {
         const rawObjName = node.object.name;
         const objName = this.resolveObjectName(rawObjName); // Use alias resolver
-        const propName = t.isStringLiteral(node.property)
-          ? node.property.value
-          : node.property.name;
+        const propName = t.isStringLiteral(node.property) ? node.property.value : node.property.name;
 
         if (
           this.objectPropertiesMap &&
@@ -249,7 +212,7 @@ export class ConcatenatedKeyExtractor {
             );
             return {
               value: propValueNode.value,
-              segments: [`${objName}.${propName}`],
+              segments: [`${objName}.${propName}`]
             };
           }
         }
@@ -261,43 +224,30 @@ export class ConcatenatedKeyExtractor {
       t.isCallExpression(node) &&
       t.isMemberExpression(node.callee) &&
       t.isIdentifier(node.callee.object) &&
-      (t.isStringLiteral(node.callee.property) ||
-        t.isIdentifier(node.callee.property))
+      (t.isStringLiteral(node.callee.property) || t.isIdentifier(node.callee.property))
     ) {
       const rawObjName = node.callee.object.name;
       const objName = this.resolveObjectName(rawObjName);
-      const propName = t.isStringLiteral(node.callee.property)
-        ? node.callee.property.value
-        : node.callee.property.name;
+      const propName = t.isStringLiteral(node.callee.property) ? node.callee.property.value : node.callee.property.name;
 
       if (this.objectPropertiesMap?.[objName]?.[propName]) {
         const propValue = this.objectPropertiesMap[objName][propName];
         // literal case
         if (t.isStringLiteral(propValue)) {
-          this.debug.log(
-            `getStringFromNode: Resolved ${objName}.${propName} → '${propValue.value}'`
-          );
+          this.debug.log(`getStringFromNode: Resolved ${objName}.${propName} → '${propValue.value}'`);
           return { value: propValue.value, segments: [propName] };
         }
         // function case: pull its returned string
-        if (
-          (t.isFunctionExpression(propValue) ||
-            t.isArrowFunctionExpression(propValue)) &&
-          propValue.body
-        ) {
+        if ((t.isFunctionExpression(propValue) || t.isArrowFunctionExpression(propValue)) && propValue.body) {
           // New: Handle implicit return from arrow function
           if (t.isStringLiteral(propValue.body)) {
             const rtn = propValue.body.value;
-            this.debug.log(
-              `getStringFromNode: Resolved ${objName}.${propName}() → '${rtn}' (implicit return)`
-            );
+            this.debug.log(`getStringFromNode: Resolved ${objName}.${propName}() → '${rtn}' (implicit return)`);
             return { value: rtn, segments: [propName] };
           }
           const rtn = this._findStringReturnInBlock(propValue.body);
           if (rtn) {
-            this.debug.log(
-              `getStringFromNode: Resolved ${objName}.${propName}() → '${rtn}'`
-            );
+            this.debug.log(`getStringFromNode: Resolved ${objName}.${propName}() → '${rtn}'`);
             return { value: rtn, segments: [propName] };
           }
         }
@@ -305,11 +255,7 @@ export class ConcatenatedKeyExtractor {
     }
 
     // Original logic for direct segment function calls (e.g., funcName())
-    if (
-      t.isCallExpression(node) &&
-      t.isIdentifier(node.callee) &&
-      this.segmentFunctionsMap[node.callee.name]
-    ) {
+    if (t.isCallExpression(node) && t.isIdentifier(node.callee) && this.segmentFunctionsMap[node.callee.name]) {
       const segmentName = node.callee.name;
       const segmentValue = this.segmentFunctionsMap[segmentName];
       this.debug.log(
@@ -323,20 +269,16 @@ export class ConcatenatedKeyExtractor {
       this.debug.log(
         `getStringFromNode for ${assemblerFuncName}: Segment Call '${
           node.callee.name
-        }' NOT FOUND in segmentFunctionsMap. Keys: ${Object.keys(
-          this.segmentFunctionsMap
-        ).join(", ")}`
+        }' NOT FOUND in segmentFunctionsMap. Keys: ${Object.keys(this.segmentFunctionsMap).join(', ')}`
       );
     } else if (t.isCallExpression(node) && !t.isIdentifier(node.callee)) {
       this.debug.log(
         `getStringFromNode for ${assemblerFuncName}: CallExpression callee is not Identifier. Type: ${
-          node.callee ? node.callee.type : "N/A"
+          node.callee ? node.callee.type : 'N/A'
         }`
       );
-    } else if (node && node.type !== "CallExpression") {
-      this.debug.log(
-        `getStringFromNode for ${assemblerFuncName}: Node is not a CallExpression. Type: ${node.type}`
-      );
+    } else if (node && node.type !== 'CallExpression') {
+      this.debug.log(`getStringFromNode for ${assemblerFuncName}: Node is not a CallExpression. Type: ${node.type}`);
     } else {
       this.debug.log(
         `getStringFromNode for ${assemblerFuncName}: Node is not a resolvable CallExpression or other issue.`
@@ -360,22 +302,15 @@ export class ConcatenatedKeyExtractor {
 
     const traverse = (currentNode, parentNode, depth = 0) => {
       this.debug.log(
-        `${"  ".repeat(
-          depth
-        )}flattenConcatenation.traverse for ${assemblerFuncName}: Node type: ${
-          currentNode ? currentNode.type : "N/A"
+        `${'  '.repeat(depth)}flattenConcatenation.traverse for ${assemblerFuncName}: Node type: ${
+          currentNode ? currentNode.type : 'N/A'
         }`
       );
 
       // Allow both '+' and '|' as operators for recursion
-      if (
-        t.isBinaryExpression(currentNode) &&
-        (currentNode.operator === "+" || currentNode.operator === "|")
-      ) {
+      if (t.isBinaryExpression(currentNode) && (currentNode.operator === '+' || currentNode.operator === '|')) {
         this.debug.log(
-          `${"  ".repeat(
-            depth
-          )}flattenConcatenation.traverse for ${assemblerFuncName}: BinaryExpr (${
+          `${'  '.repeat(depth)}flattenConcatenation.traverse for ${assemblerFuncName}: BinaryExpr (${
             currentNode.operator
           }). Traversing left then right.`
         );
@@ -383,22 +318,17 @@ export class ConcatenatedKeyExtractor {
         traverse(currentNode.right, currentNode, depth + 1);
       } else {
         this.debug.log(
-          `${"  ".repeat(
+          `${'  '.repeat(
             depth
           )}flattenConcatenation.traverse for ${assemblerFuncName}: Leaf node. Attempting getStringFromNode.`
         );
-        const result = this.getStringFromNode(
-          currentNode,
-          assemblerFuncName,
-          t,
-          parentNode
-        );
+        const result = this.getStringFromNode(currentNode, assemblerFuncName, t, parentNode);
         if (result.value === null) {
           this.debug.log(
-            `${"  ".repeat(
+            `${'  '.repeat(
               depth
             )}flattenConcatenation.traverse for ${assemblerFuncName}: getStringFromNode returned null for a part (type: ${
-              currentNode ? currentNode.type : "N/A"
+              currentNode ? currentNode.type : 'N/A'
             }).`
           );
         }
@@ -407,17 +337,9 @@ export class ConcatenatedKeyExtractor {
       }
     };
 
-    this.debug.log(
-      `flattenConcatenation for ${assemblerFuncName}: Initial node type: ${
-        node ? node.type : "N/A"
-      }`
-    );
+    this.debug.log(`flattenConcatenation for ${assemblerFuncName}: Initial node type: ${node ? node.type : 'N/A'}`);
     traverse(node, null);
-    this.debug.log(
-      `flattenConcatenation for ${assemblerFuncName}: Resulting parts: ${JSON.stringify(
-        parts
-      )}`
-    );
+    this.debug.log(`flattenConcatenation for ${assemblerFuncName}: Resulting parts: ${JSON.stringify(parts)}`);
 
     // Store segments for later use
     this.lastSegments = allSegments;
@@ -441,7 +363,7 @@ export class ConcatenatedKeyExtractor {
   extract(path) {
     const segments = this.resolveSegments(path);
     if (segments) {
-      const key = segments.join("");
+      const key = segments.join('');
       this.debugLog(`Concatenated key: ${key}`);
       return key;
     }
@@ -457,11 +379,11 @@ export class ConcatenatedKeyExtractor {
     const segments = [];
     let currentPath = path;
 
-    while (currentPath.isBinaryExpression({ operator: "+" })) {
-      const rightSegment = this.resolveSegment(currentPath.get("right"));
+    while (currentPath.isBinaryExpression({ operator: '+' })) {
+      const rightSegment = this.resolveSegment(currentPath.get('right'));
       if (rightSegment === null) return null;
       segments.unshift(rightSegment);
-      currentPath = currentPath.get("left");
+      currentPath = currentPath.get('left');
     }
 
     const leftSegment = this.resolveSegment(currentPath);
@@ -482,9 +404,9 @@ export class ConcatenatedKeyExtractor {
     }
 
     if (path.isCallExpression()) {
-      const callee = path.get("callee");
+      const callee = path.get('callee');
       const resolvedFunc = this.resolveSegment(callee);
-      if (resolvedFunc && typeof resolvedFunc === "function") {
+      if (resolvedFunc && typeof resolvedFunc === 'function') {
         try {
           // This is a simplified simulation. A more robust solution might
           // require a sandbox environment to safely execute the function.
@@ -500,34 +422,32 @@ export class ConcatenatedKeyExtractor {
       const binding = path.scope.getBinding(path.node.object.name);
 
       if (binding && binding.path.isVariableDeclarator()) {
-        let init = binding.path.get("init");
+        let init = binding.path.get('init');
 
         // Resolve alias if the init is an Identifier
         if (init.isIdentifier()) {
           const aliasBinding = init.scope.getBinding(init.node.name);
           if (aliasBinding && aliasBinding.path.isVariableDeclarator()) {
-            init = aliasBinding.path.get("init");
+            init = aliasBinding.path.get('init');
           }
         }
 
         if (init.isObjectExpression()) {
           const propertyName = path.node.property.value;
-          const property = init
-            .get("properties")
-            .find((p) => p.node.key.value === propertyName);
+          const property = init.get('properties').find(p => p.node.key.value === propertyName);
           if (property) {
-            const valuePath = property.get("value");
+            const valuePath = property.get('value');
             if (valuePath.isStringLiteral()) {
               return valuePath.node.value;
             } else if (valuePath.isFunctionExpression()) {
               // Attempt to resolve the function's return value
               let returnedValue = null;
               valuePath.traverse({
-                ReturnStatement: (returnPath) => {
-                  if (returnPath.get("argument").isStringLiteral()) {
-                    returnedValue = returnPath.get("argument").node.value;
+                ReturnStatement: returnPath => {
+                  if (returnPath.get('argument').isStringLiteral()) {
+                    returnedValue = returnPath.get('argument').node.value;
                   }
-                },
+                }
               });
               return returnedValue;
             }

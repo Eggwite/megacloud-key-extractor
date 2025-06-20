@@ -1,5 +1,5 @@
-import { debugLoggers } from "../config/debug.js";
-import { ConcatenatedKeyExtractor } from "./concatenatedKeyExtractor.js";
+import { debugLoggers } from '../config/debug.js';
+import { ConcatenatedKeyExtractor } from './concatenatedKeyExtractor.js';
 
 /**
  * Extracts keys from function-based patterns (declarations, expressions, assignments)
@@ -8,9 +8,7 @@ export class FunctionKeyExtractor {
   constructor(segmentFunctionsMap) {
     this.segmentFunctionsMap = segmentFunctionsMap;
     this.debug = debugLoggers.assemblerLogic;
-    this.concatenatedExtractor = new ConcatenatedKeyExtractor(
-      segmentFunctionsMap
-    );
+    this.concatenatedExtractor = new ConcatenatedKeyExtractor(segmentFunctionsMap);
   }
 
   setTypes(t) {
@@ -40,46 +38,23 @@ export class FunctionKeyExtractor {
    * @param {boolean} findAllCandidates - Whether to find all candidates
    * @returns {Object} Babel visitor object
    */
-  createVisitors(
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
+  createVisitors(foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
     // Use enter visitors to catch nested functions/variables
     return {
-      FunctionDeclaration: (path) => {
-        this.handleFunctionDeclaration(
-          path,
-          foundKeys,
-          nonHexCandidates,
-          wrongLengthCandidates,
-          findAllCandidates
-        );
+      FunctionDeclaration: path => {
+        this.handleFunctionDeclaration(path, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates);
       },
-      VariableDeclarator: (path) => {
-        this.handleVariableDeclarator(
-          path,
-          foundKeys,
-          nonHexCandidates,
-          wrongLengthCandidates,
-          findAllCandidates
-        );
+      VariableDeclarator: path => {
+        this.handleVariableDeclarator(path, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates);
       },
-      AssignmentExpression: (path) => {
-        this.handleAssignmentExpression(
-          path,
-          foundKeys,
-          nonHexCandidates,
-          wrongLengthCandidates,
-          findAllCandidates
-        );
+      AssignmentExpression: path => {
+        this.handleAssignmentExpression(path, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates);
       },
       // Traverse into all BlockStatements to catch nested declarations
       BlockStatement: {
-        enter: (blockPath) => {
+        enter: blockPath => {
           blockPath.traverse({
-            FunctionDeclaration: (path) => {
+            FunctionDeclaration: path => {
               this.handleFunctionDeclaration(
                 path,
                 foundKeys,
@@ -88,7 +63,7 @@ export class FunctionKeyExtractor {
                 findAllCandidates
               );
             },
-            VariableDeclarator: (path) => {
+            VariableDeclarator: path => {
               this.handleVariableDeclarator(
                 path,
                 foundKeys,
@@ -97,7 +72,7 @@ export class FunctionKeyExtractor {
                 findAllCandidates
               );
             },
-            AssignmentExpression: (path) => {
+            AssignmentExpression: path => {
               this.handleAssignmentExpression(
                 path,
                 foundKeys,
@@ -105,39 +80,29 @@ export class FunctionKeyExtractor {
                 wrongLengthCandidates,
                 findAllCandidates
               );
-            },
+            }
           });
-        },
-      },
+        }
+      }
     };
   }
 
   /**
    * Handles function declarations
    */
-  handleFunctionDeclaration(
-    path,
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
+  handleFunctionDeclaration(path, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
     const t = this.t;
 
     const funcNode = path.node;
-    const funcName = funcNode.id ? funcNode.id.name : "anonymousFunction_decl";
+    const funcName = funcNode.id ? funcNode.id.name : 'anonymousFunction_decl';
 
-    this.debug.log(
-      `Visiting FunctionDeclaration for potential assembler function: ${funcName}`
-    );
+    this.debug.log(`Visiting FunctionDeclaration for potential assembler function: ${funcName}`);
 
     if (funcNode.body && t.isBlockStatement(funcNode.body)) {
-      this.debug.log(
-        `Function ${funcName} (decl) has BlockStatement body. Traversing for ReturnStatements...`
-      );
+      this.debug.log(`Function ${funcName} (decl) has BlockStatement body. Traversing for ReturnStatements...`);
 
-      path.get("body").traverse({
-        ReturnStatement: (returnPath) => {
+      path.get('body').traverse({
+        ReturnStatement: returnPath => {
           this.processReturnStatement(
             returnPath,
             funcName,
@@ -146,12 +111,12 @@ export class FunctionKeyExtractor {
             wrongLengthCandidates,
             findAllCandidates
           );
-        },
+        }
       });
     } else {
       this.debug.log(
         `Function ${funcName} (decl) does not have a BlockStatement body. Type: ${
-          funcNode.body ? funcNode.body.type : "N/A"
+          funcNode.body ? funcNode.body.type : 'N/A'
         }. Skipping ReturnStatement traversal.`
       );
     }
@@ -160,43 +125,24 @@ export class FunctionKeyExtractor {
   /**
    * Handles variable declarators (arrow functions and function expressions)
    */
-  handleVariableDeclarator(
-    path,
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
+  handleVariableDeclarator(path, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
     const t = this.t;
 
     const funcInitNode = path.node.init;
-    const varName =
-      path.node.id && t.isIdentifier(path.node.id)
-        ? path.node.id.name
-        : "anonymousVariableFunction";
+    const varName = path.node.id && t.isIdentifier(path.node.id) ? path.node.id.name : 'anonymousVariableFunction';
 
-    this.debug.log(
-      `Visiting VariableDeclarator for potential assembler function: ${varName}`
-    );
+    this.debug.log(`Visiting VariableDeclarator for potential assembler function: ${varName}`);
 
-    if (
-      funcInitNode &&
-      (t.isArrowFunctionExpression(funcInitNode) ||
-        t.isFunctionExpression(funcInitNode))
-    ) {
+    if (funcInitNode && (t.isArrowFunctionExpression(funcInitNode) || t.isFunctionExpression(funcInitNode))) {
       this.debug.log(
-        `Function ${varName} (var decl) has body type: ${
-          funcInitNode.body ? funcInitNode.body.type : "N/A"
-        }`
+        `Function ${varName} (var decl) has body type: ${funcInitNode.body ? funcInitNode.body.type : 'N/A'}`
       );
 
       if (t.isBlockStatement(funcInitNode.body)) {
-        this.debug.log(
-          `Function ${varName} (var decl) has BlockStatement body. Traversing for ReturnStatements...`
-        );
+        this.debug.log(`Function ${varName} (var decl) has BlockStatement body. Traversing for ReturnStatements...`);
 
-        path.get("init.body").traverse({
-          ReturnStatement: (returnPath) => {
+        path.get('init.body').traverse({
+          ReturnStatement: returnPath => {
             this.processReturnStatement(
               returnPath,
               varName,
@@ -205,7 +151,7 @@ export class FunctionKeyExtractor {
               wrongLengthCandidates,
               findAllCandidates
             );
-          },
+          }
         });
       } else if (funcInitNode.body) {
         // Implicit return for arrow functions
@@ -213,7 +159,7 @@ export class FunctionKeyExtractor {
           `Function ${varName} (var decl) has implicit return (body type: ${funcInitNode.body.type}). Processing body directly.`
         );
 
-        if (funcInitNode.body.type === "BinaryExpression") {
+        if (funcInitNode.body.type === 'BinaryExpression') {
           this.debug.log(
             `${varName} (var decl implicit) Return Arg Operator (Binary): '${funcInitNode.body.operator}'`
           );
@@ -234,13 +180,7 @@ export class FunctionKeyExtractor {
   /**
    * Handles assignment expressions
    */
-  handleAssignmentExpression(
-    path,
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
+  handleAssignmentExpression(path, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
     const t = this.t;
 
     const assignLeft = path.node.left;
@@ -248,28 +188,19 @@ export class FunctionKeyExtractor {
 
     if (
       t.isIdentifier(assignLeft) &&
-      (t.isArrowFunctionExpression(assignRight) ||
-        t.isFunctionExpression(assignRight))
+      (t.isArrowFunctionExpression(assignRight) || t.isFunctionExpression(assignRight))
     ) {
       const funcName = assignLeft.name;
       const funcNode = assignRight;
 
-      this.debug.log(
-        `Visiting AssignmentExpression for potential assembler function: ${funcName}`
-      );
-      this.debug.log(
-        `Function ${funcName} (assign) has body type: ${
-          funcNode.body ? funcNode.body.type : "N/A"
-        }`
-      );
+      this.debug.log(`Visiting AssignmentExpression for potential assembler function: ${funcName}`);
+      this.debug.log(`Function ${funcName} (assign) has body type: ${funcNode.body ? funcNode.body.type : 'N/A'}`);
 
       if (t.isBlockStatement(funcNode.body)) {
-        this.debug.log(
-          `Function ${funcName} (assign) has BlockStatement body. Traversing for ReturnStatements...`
-        );
+        this.debug.log(`Function ${funcName} (assign) has BlockStatement body. Traversing for ReturnStatements...`);
 
-        path.get("right.body").traverse({
-          ReturnStatement: (returnPath) => {
+        path.get('right.body').traverse({
+          ReturnStatement: returnPath => {
             this.processReturnStatement(
               returnPath,
               funcName,
@@ -278,7 +209,7 @@ export class FunctionKeyExtractor {
               wrongLengthCandidates,
               findAllCandidates
             );
-          },
+          }
         });
       } else if (funcNode.body) {
         // Implicit return for arrow functions
@@ -286,10 +217,8 @@ export class FunctionKeyExtractor {
           `Function ${funcName} (assign) has implicit return (body type: ${funcNode.body.type}). Processing body directly.`
         );
 
-        if (funcNode.body.type === "BinaryExpression") {
-          this.debug.log(
-            `${funcName} (assign implicit) Return Arg Operator (Binary): '${funcNode.body.operator}'`
-          );
+        if (funcNode.body.type === 'BinaryExpression') {
+          this.debug.log(`${funcName} (assign implicit) Return Arg Operator (Binary): '${funcNode.body.operator}'`);
         }
 
         this.processImplicitReturn(
@@ -307,84 +236,37 @@ export class FunctionKeyExtractor {
   /**
    * Processes return statements
    */
-  processReturnStatement(
-    returnPath,
-    funcName,
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
+  processReturnStatement(returnPath, funcName, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
     this.debug.log(
       `Potential assembler: ${funcName}. Found ReturnStatement. Arg type: ${
-        returnPath.node.argument ? returnPath.node.argument.type : "N/A"
+        returnPath.node.argument ? returnPath.node.argument.type : 'N/A'
       }`
     );
 
-    if (
-      returnPath.node.argument &&
-      returnPath.node.argument.type === "BinaryExpression"
-    ) {
-      this.debug.log(
-        `${funcName} Return Arg Operator (Binary): '${returnPath.node.argument.operator}'`
-      );
+    if (returnPath.node.argument && returnPath.node.argument.type === 'BinaryExpression') {
+      this.debug.log(`${funcName} Return Arg Operator (Binary): '${returnPath.node.argument.operator}'`);
     }
 
-    const result = this.concatenatedExtractor.deriveAndValidate(
-      returnPath.node.argument,
-      funcName
-    );
+    const result = this.concatenatedExtractor.deriveAndValidate(returnPath.node.argument, funcName);
 
-    this.handleExtractionResult(
-      result,
-      foundKeys,
-      nonHexCandidates,
-      wrongLengthCandidates,
-      findAllCandidates
-    );
+    this.handleExtractionResult(result, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates);
   }
 
   /**
    * Processes implicit returns (arrow functions)
    */
-  processImplicitReturn(
-    bodyNode,
-    funcName,
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
-    const result = this.concatenatedExtractor.deriveAndValidate(
-      bodyNode,
-      funcName
-    );
-    this.handleExtractionResult(
-      result,
-      foundKeys,
-      nonHexCandidates,
-      wrongLengthCandidates,
-      findAllCandidates
-    );
+  processImplicitReturn(bodyNode, funcName, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
+    const result = this.concatenatedExtractor.deriveAndValidate(bodyNode, funcName);
+    this.handleExtractionResult(result, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates);
   }
 
   /**
    * Handles the result of key extraction
    */
-  handleExtractionResult(
-    result,
-    foundKeys,
-    nonHexCandidates,
-    wrongLengthCandidates,
-    findAllCandidates
-  ) {
+  handleExtractionResult(result, foundKeys, nonHexCandidates, wrongLengthCandidates, findAllCandidates) {
     if (result) {
       if (result.isValidKey) {
-        if (
-          !foundKeys.some(
-            (fk) => fk.key === result.key && fk.type === result.type
-          )
-        ) {
+        if (!foundKeys.some(fk => fk.key === result.key && fk.type === result.type)) {
           foundKeys.push({ ...result });
         }
         if (!findAllCandidates) {
@@ -396,7 +278,7 @@ export class FunctionKeyExtractor {
           result: result.key,
           type: result.type,
           source: result.source,
-          segments: result.segments,
+          segments: result.segments
         });
       } else if (result.isWrongLength) {
         wrongLengthCandidates.push({
@@ -405,7 +287,7 @@ export class FunctionKeyExtractor {
           source: result.source,
           segments: result.segments,
           length: result.actualLength,
-          expectedLength: result.expectedLength,
+          expectedLength: result.expectedLength
         });
       }
     }

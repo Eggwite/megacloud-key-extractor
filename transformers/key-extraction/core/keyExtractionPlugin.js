@@ -10,16 +10,15 @@
  * The plugin is organized into modular components for better maintainability.
  */
 
-import { debugLoggers } from "../config/debug.js";
-import { ArrayCollector } from "../collectors/arrayCollector.js";
-import { SegmentFunctionCollector } from "../collectors/segmentFunctionCollector.js";
-import { ArrayJoinExtractor } from "../extractors/arrayJoinExtractor.js";
-import { FunctionKeyExtractor } from "../extractors/functionKeyExtractor.js";
-import {
-  printResults,
-  createExtractionSummary,
-} from "../utils/extractionUtils.js";
-import { debug } from "../../centralDebug.js";
+import { debugLoggers } from '../config/debug.js';
+import { ArrayCollector } from '../collectors/arrayCollector.js';
+import { SegmentFunctionCollector } from '../collectors/segmentFunctionCollector.js';
+import { ArrayJoinExtractor } from '../extractors/arrayJoinExtractor.js';
+import { FunctionKeyExtractor } from '../extractors/functionKeyExtractor.js';
+import createFromCharCodeExtractor from '../extractors/fromCharCodeExtractor.js';
+import createSliceExtractor from '../extractors/sliceExtractor.js';
+import { printResults, createExtractionSummary } from '../utils/extractionUtils.js';
+import { debug } from '../../centralDebug.js';
 
 /**
  * Logs the results of the collection phases
@@ -28,37 +27,56 @@ function logCollectionResults(segmentFunctionsMap, potentialKeyArrays) {
   const assemblerDebug = debugLoggers.assemblerLogic;
   const arrayDebug = debugLoggers.arrayJoin;
 
-  debug.log("\n--- Collection Phase Results ---");
+  debug.log('\n--- Collection Phase Results ---');
 
   const mapKeys = Object.keys(segmentFunctionsMap);
   debug.log(`Segment functions collected: ${mapKeys.length}`);
 
   if (mapKeys.length > 0) {
-    assemblerDebug.log("Available segment keys:", mapKeys.join(", "));
+    assemblerDebug.log('Available segment keys:', mapKeys.join(', '));
   } else {
-    debug.log("No segment functions available for key extraction.");
+    debug.log('No segment functions available for key extraction.');
   }
 
   const arrayKeys = Object.keys(potentialKeyArrays);
   debug.log(`Potential key arrays collected: ${arrayKeys.length}`);
 
   if (arrayKeys.length > 0) {
-    arrayDebug.log("Available array keys:", arrayKeys.join(", "));
+    arrayDebug.log('Available array keys:', arrayKeys.join(', '));
   }
 }
 
 // Helper to find a string literal initializer for a variable in the current or parent scope
 function findStringDeclarationValue(path, varName, t) {
-  if (!path) return null;
   const binding = path.scope.getBinding(varName);
   if (!binding) {
-    return findStringDeclarationValue(path.parentPath, varName, t);
+    return null;
   }
-  const node = binding.path.node;
-  if (t.isVariableDeclarator(node) && t.isStringLiteral(node.init)) {
-    return node.init.value;
+
+  let lastAssignedValue = null;
+  let lastAssignmentPath = null;
+
+  // Check the initial declaration
+  if (binding.path.isVariableDeclarator() && t.isStringLiteral(binding.path.node.init)) {
+    lastAssignedValue = binding.path.node.init.value;
+    lastAssignmentPath = binding.path;
   }
-  return null;
+
+  // Check all constant violations (assignments)
+  for (const assignmentPath of binding.constantViolations) {
+    // We only care about assignments that happen before the current path
+    if (assignmentPath.node.start < path.node.start) {
+      if (assignmentPath.isAssignmentExpression() && assignmentPath.get('right').isStringLiteral()) {
+        // If this is the first assignment we've seen, or it's later than the last one
+        if (!lastAssignmentPath || assignmentPath.node.start > lastAssignmentPath.node.start) {
+          lastAssignedValue = assignmentPath.get('right').node.value;
+          lastAssignmentPath = assignmentPath;
+        }
+      }
+    }
+  }
+
+  return lastAssignedValue;
 }
 
 // Helper to handle reversed string calls like: j.split('').reverse().join('')
@@ -76,29 +94,20 @@ function resolveReversedStringCall(callNode, path, t) {
   };
 
   // Must match callNode of form .join('') on .reverse() on .split('')
-  if (
-    !t.isCallExpression(callNode) ||
-    !t.isStringLiteral(callNode.arguments[0], { value: "" })
-  )
-    return null;
+  if (!t.isCallExpression(callNode) || !t.isStringLiteral(callNode.arguments[0], { value: '' })) return null;
 
   const joinCallee = callNode.callee;
-  if (!isMemberProperty(joinCallee, "join")) return null;
+  if (!isMemberProperty(joinCallee, 'join')) return null;
 
   const reverseCall = joinCallee.object;
-  if (!t.isCallExpression(reverseCall) || reverseCall.arguments.length > 0)
-    return null;
+  if (!t.isCallExpression(reverseCall) || reverseCall.arguments.length > 0) return null;
   const reverseCallee = reverseCall.callee;
-  if (!isMemberProperty(reverseCallee, "reverse")) return null;
+  if (!isMemberProperty(reverseCallee, 'reverse')) return null;
 
   const splitCall = reverseCallee.object;
   if (!t.isCallExpression(splitCall)) return null;
   const splitCallee = splitCall.callee;
-  if (
-    !isMemberProperty(splitCallee, "split") ||
-    !t.isStringLiteral(splitCall.arguments[0], { value: "" })
-  )
-    return null;
+  if (!isMemberProperty(splitCallee, 'split') || !t.isStringLiteral(splitCall.arguments[0], { value: '' })) return null;
 
   // The source is e.g. j in j.split('').reverse().join('')
   if (!t.isIdentifier(splitCallee.object)) return null;
@@ -106,7 +115,7 @@ function resolveReversedStringCall(callNode, path, t) {
   // Attempt to find the string literal for that variable
   const strVal = findStringDeclarationValue(path, baseId, t);
   if (!strVal) return null;
-  return strVal.split("").reverse().join("");
+  return strVal.split('').reverse().join('');
 }
 
 // Helper to resolve function calls with conditional logic
@@ -114,11 +123,11 @@ function resolveConditionalFunctionCall(funcNode, path, t) {
   if (!funcNode || !t.isFunction(funcNode) || !funcNode.body) return null;
 
   let resolvedValue = null;
-  const funcPath = path.get("init"); // path is the VariableDeclarator path
+  const funcPath = path.get('init'); // path is the VariableDeclarator path
 
   // If the function body exists, traverse it to find the return statement
-  if (funcPath.has("body")) {
-    funcPath.get("body").traverse({
+  if (funcPath.has('body')) {
+    funcPath.get('body').traverse({
       ReturnStatement(returnPath) {
         // If we've already found the key, stop searching
         if (resolvedValue) {
@@ -134,7 +143,7 @@ function resolveConditionalFunctionCall(funcNode, path, t) {
             returnPath.stop(); // Stop traversal once the key is found
           }
         }
-      },
+      }
     });
   }
 
@@ -146,7 +155,7 @@ function resolveConditionalFunctionCall(funcNode, path, t) {
  * @param {Object} api - Babel API object
  * @returns {Object} Babel plugin configuration
  */
-export const findAndExtractKeyPlugin = (api) => {
+export const findAndExtractKeyPlugin = api => {
   const { types: t } = api;
   const FIND_ALL_CANDIDATES = true;
 
@@ -162,7 +171,7 @@ export const findAndExtractKeyPlugin = (api) => {
     return false;
   };
 
-  const resolveFunctionNodeToStringLiteral = (funcNode) => {
+  const resolveFunctionNodeToStringLiteral = funcNode => {
     if (!funcNode || !t.isFunction(funcNode) || !funcNode.body) {
       return null;
     }
@@ -174,7 +183,7 @@ export const findAndExtractKeyPlugin = (api) => {
       return null;
     }
     let resolvedValue = null;
-    const findReturn = (node) => {
+    const findReturn = node => {
       if (t.isReturnStatement(node)) {
         const arg = node.argument;
         if (t.isStringLiteral(arg)) {
@@ -212,8 +221,8 @@ export const findAndExtractKeyPlugin = (api) => {
 
   // Add helper to resolve string concatenations in return statements
   const resolveBinaryExpression = (expr, t) => {
-    if (!t.isBinaryExpression(expr) || expr.operator !== "+") return null;
-    const resolveSide = (side) => {
+    if (!t.isBinaryExpression(expr) || expr.operator !== '+') return null;
+    const resolveSide = side => {
       if (t.isBinaryExpression(side)) return resolveBinaryExpression(side, t);
       if (t.isStringLiteral(side)) return side.value;
       return null;
@@ -234,7 +243,7 @@ export const findAndExtractKeyPlugin = (api) => {
       return null;
     }
 
-    const body = funcPath.get("body");
+    const body = funcPath.get('body');
 
     // Handle implicit return for arrow functions
     if (body.isStringLiteral()) {
@@ -247,22 +256,18 @@ export const findAndExtractKeyPlugin = (api) => {
 
     let resolvedValue = null;
 
-    const findReturnRecursive = (blockPath) => {
+    const findReturnRecursive = blockPath => {
       if (!blockPath.isBlockStatement()) return false;
 
-      for (const stmtPath of blockPath.get("body")) {
+      for (const stmtPath of blockPath.get('body')) {
         if (stmtPath.isReturnStatement()) {
-          const argPath = stmtPath.get("argument");
+          const argPath = stmtPath.get('argument');
           if (argPath.isStringLiteral()) {
             resolvedValue = argPath.node;
             return true;
           }
           if (argPath.isCallExpression()) {
-            const reversedVal = resolveReversedStringCall(
-              argPath.node,
-              stmtPath,
-              t
-            );
+            const reversedVal = resolveReversedStringCall(argPath.node, stmtPath, t);
             if (reversedVal) {
               resolvedValue = t.stringLiteral(reversedVal);
               return true;
@@ -277,8 +282,8 @@ export const findAndExtractKeyPlugin = (api) => {
           }
         }
         if (stmtPath.isIfStatement()) {
-          if (findReturnRecursive(stmtPath.get("consequent"))) return true;
-          const alternate = stmtPath.get("alternate");
+          if (findReturnRecursive(stmtPath.get('consequent'))) return true;
+          const alternate = stmtPath.get('alternate');
           if (alternate.node && findReturnRecursive(alternate)) return true;
         }
       }
@@ -289,15 +294,32 @@ export const findAndExtractKeyPlugin = (api) => {
     return resolvedValue;
   };
 
+  // Helper to analyze the callback function of an Array.prototype.map() call
+  const analyzeMapCallback = (funcPath, t) => {
+    if (!funcPath.isFunction()) {
+      // Not a function, can't analyze
+      return { usesParameter: true };
+    }
+
+    const param = funcPath.node.params[0];
+    // If there's no parameter, it's definitely not using it.
+    if (!param) {
+      return { usesParameter: false };
+    }
+
+    // Check if the parameter is referenced in the function body.
+    const binding = funcPath.scope.getBinding(param.name);
+    return { usesParameter: binding.referenced };
+  };
+
   return {
     visitor: {
       Program(programPath, state) {
         const performanceLogger = debugLoggers.performance;
-        performanceLogger.time("Key Extraction Time");
+        performanceLogger.time('Key Extraction Time');
 
         // Pass resolver to other visitors via state
-        state.resolveFunctionNodeToStringLiteral =
-          resolveFunctionNodeToStringLiteral;
+        state.resolveFunctionNodeToStringLiteral = resolveFunctionNodeToStringLiteral;
 
         // Initialize result containers
         let foundKeys = [];
@@ -309,9 +331,7 @@ export const findAndExtractKeyPlugin = (api) => {
         let potentialKeyArrays = {};
 
         // --- DIRECT SCAN: Find the specific reversed string AES key pattern ---
-        debug.log(
-          "--- Starting Direct Scan: Looking for Common Key Patterns ---"
-        );
+        debug.log('--- Starting Direct Scan: Looking for Common Key Patterns ---');
 
         // Cache for found string literals to avoid duplicate processing
         const stringLiterals = new Map();
@@ -321,36 +341,21 @@ export const findAndExtractKeyPlugin = (api) => {
           VariableDeclarator(path) {
             if (t.isStringLiteral(path.node.init)) {
               const value = path.node.init.value;
-              if (
-                /^[0-9a-f]+$/i.test(value) &&
-                (value.length === 32 || value.length === 64)
-              ) {
-                debug.log(
-                  `Found potential key string in variable ${path.node.id.name}:`,
-                  value
-                );
+              if (/^[0-9a-f]+$/i.test(value) && (value.length === 32 || value.length === 64)) {
+                debug.log(`Found potential key string in variable ${path.node.id.name}:`, value);
                 stringLiterals.set(path.node.id.name, value);
               }
             }
           },
           AssignmentExpression(path) {
-            if (
-              t.isIdentifier(path.node.left) &&
-              t.isStringLiteral(path.node.right)
-            ) {
+            if (t.isIdentifier(path.node.left) && t.isStringLiteral(path.node.right)) {
               const value = path.node.right.value;
-              if (
-                /^[0-9a-f]+$/i.test(value) &&
-                (value.length === 32 || value.length === 64)
-              ) {
-                debug.log(
-                  `Found potential key string in assignment to ${path.node.left.name}:`,
-                  value
-                );
+              if (/^[0-9a-f]+$/i.test(value) && (value.length === 32 || value.length === 64)) {
+                debug.log(`Found potential key string in assignment to ${path.node.left.name}:`, value);
                 stringLiterals.set(path.node.left.name, value);
               }
             }
-          },
+          }
         });
 
         // Second pass: find reversed string patterns using collected variables
@@ -361,40 +366,31 @@ export const findAndExtractKeyPlugin = (api) => {
             if (!t.isCallExpression(arg)) return;
 
             const joinCallee = arg.callee;
-            if (!isMemberProperty(joinCallee, "join")) return;
+            if (!isMemberProperty(joinCallee, 'join')) return;
 
             const reverseCall = joinCallee.object;
-            if (
-              !t.isCallExpression(reverseCall) ||
-              reverseCall.arguments.length > 0
-            )
-              return;
+            if (!t.isCallExpression(reverseCall) || reverseCall.arguments.length > 0) return;
 
             const reverseCallee = reverseCall.callee;
-            if (!isMemberProperty(reverseCallee, "reverse")) return;
+            if (!isMemberProperty(reverseCallee, 'reverse')) return;
 
             const splitCall = reverseCallee.object;
             if (!t.isCallExpression(splitCall)) return;
 
             const splitCallee = splitCall.callee;
-            if (!isMemberProperty(splitCallee, "split")) return;
+            if (!isMemberProperty(splitCallee, 'split')) return;
 
             // Get the variable being reversed (e.g., j in j.split().reverse().join())
             const varNode = splitCallee.object;
 
             if (t.isIdentifier(varNode) && stringLiterals.has(varNode.name)) {
               const originalValue = stringLiterals.get(varNode.name);
-              const reversedValue = originalValue.split("").reverse().join("");
-              debug.log(
-                `Found reversed key: ${originalValue} -> ${reversedValue}`
-              );
+              const reversedValue = originalValue.split('').reverse().join('');
+              debug.log(`Found reversed key: ${originalValue} -> ${reversedValue}`);
 
               // Add to found keys if valid hex string and valid key length
               if (/^[0-9a-f]+$/i.test(reversedValue)) {
-                if (
-                  reversedValue.length === 32 ||
-                  reversedValue.length === 64
-                ) {
+                if (reversedValue.length === 32 || reversedValue.length === 64) {
                   foundKeys.push(reversedValue);
                 } else {
                   wrongLengthCandidates.push(reversedValue);
@@ -403,34 +399,26 @@ export const findAndExtractKeyPlugin = (api) => {
                 nonHexCandidates.push(reversedValue);
               }
             }
-          },
+          }
         });
 
         // --- Third pass: inspect all function‐valued var declarations for reversed‐key patterns ---
         programPath.traverse({
           VariableDeclarator(path) {
             const init = path.node.init;
-            if (
-              t.isFunctionExpression(init) ||
-              t.isArrowFunctionExpression(init)
-            ) {
+            if (t.isFunctionExpression(init) || t.isArrowFunctionExpression(init)) {
               const val = resolveConditionalFunctionCall(init, path, t);
               if (val) {
-                debug.log(
-                  `Found key via function var ${path.node.id.name}:`,
-                  val
-                );
+                debug.log(`Found key via function var ${path.node.id.name}:`, val);
                 foundKeys.push(val);
               }
             }
-          },
+          }
         });
 
         // --- Continue with regular extraction if direct scan didn't find keys ---
         if (foundKeys.length === 0) {
-          debug.log(
-            "No keys found with direct scan, continuing with standard extraction..."
-          );
+          debug.log('No keys found with direct scan, continuing with standard extraction...');
 
           // --- Pass 1: Collect Object Property Assignments & Aliases---
           const objectPropertiesMap = {};
@@ -442,36 +430,21 @@ export const findAndExtractKeyPlugin = (api) => {
               // Collect object literals `a8 = { ... }`
               if (t.isObjectExpression(path.node.init)) {
                 const objName = path.node.id.name;
-                objectPropertiesMap[objName] =
-                  objectPropertiesMap[objName] || {};
-                const propertiesPaths = path.get("init.properties");
+                objectPropertiesMap[objName] = objectPropertiesMap[objName] || {};
+                const propertiesPaths = path.get('init.properties');
                 for (const propPath of propertiesPaths) {
                   const prop = propPath.node;
-                  if (
-                    t.isObjectProperty(prop) &&
-                    (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))
-                  ) {
-                    const propName = t.isStringLiteral(prop.key)
-                      ? prop.key.value
-                      : prop.key.name;
-                    const valuePath = propPath.get("value");
+                  if (t.isObjectProperty(prop) && (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))) {
+                    const propName = t.isStringLiteral(prop.key) ? prop.key.value : prop.key.name;
+                    const valuePath = propPath.get('value');
                     if (valuePath.isFunction()) {
                       objectPropertiesMap[objName][propName] = valuePath.node;
                     } else {
-                      const resolved = resolveFunctionToStringLiteral(
-                        valuePath,
-                        t
-                      );
-                      objectPropertiesMap[objName][propName] =
-                        resolved || valuePath.node;
+                      const resolved = resolveFunctionToStringLiteral(valuePath, t);
+                      objectPropertiesMap[objName][propName] = resolved || valuePath.node;
                     }
-                  } else if (
-                    t.isObjectMethod(prop) &&
-                    (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))
-                  ) {
-                    const propName = t.isStringLiteral(prop.key)
-                      ? prop.key.value
-                      : prop.key.name;
+                  } else if (t.isObjectMethod(prop) && (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))) {
+                    const propName = t.isStringLiteral(prop.key) ? prop.key.value : prop.key.name;
                     objectPropertiesMap[objName][propName] = prop;
                   }
                 }
@@ -496,82 +469,54 @@ export const findAndExtractKeyPlugin = (api) => {
               if (
                 t.isMemberExpression(expr.left) &&
                 t.isIdentifier(expr.left.object) &&
-                (t.isStringLiteral(expr.left.property) ||
-                  t.isIdentifier(expr.left.property))
+                (t.isStringLiteral(expr.left.property) || t.isIdentifier(expr.left.property))
               ) {
                 const objName = expr.left.object.name;
                 const propName = t.isStringLiteral(expr.left.property)
                   ? expr.left.property.value
                   : expr.left.property.name;
-                objectPropertiesMap[objName] =
-                  objectPropertiesMap[objName] || {};
-                const valuePath = path.get("expression.right");
+                objectPropertiesMap[objName] = objectPropertiesMap[objName] || {};
+                const valuePath = path.get('expression.right');
                 if (valuePath.isFunction()) {
                   objectPropertiesMap[objName][propName] = valuePath.node;
                 } else {
                   const resolved = resolveFunctionToStringLiteral(valuePath, t);
-                  objectPropertiesMap[objName][propName] =
-                    resolved || valuePath.node;
+                  objectPropertiesMap[objName][propName] = resolved || valuePath.node;
                 }
-                debugLoggers.assemblerLogic.log(
-                  `Collected assigned property: ${objName}.${propName}`
-                );
+                debugLoggers.assemblerLogic.log(`Collected assigned property: ${objName}.${propName}`);
               }
               // Handle S = b3 (alias assignment)
-              else if (
-                t.isIdentifier(expr.left) &&
-                t.isIdentifier(expr.right)
-              ) {
+              else if (t.isIdentifier(expr.left) && t.isIdentifier(expr.right)) {
                 aliasMap[expr.left.name] = expr.right.name;
-                debugLoggers.assemblerLogic.log(
-                  `Collected alias (assignment): ${expr.left.name} = ${expr.right.name}`
-                );
+                debugLoggers.assemblerLogic.log(`Collected alias (assignment): ${expr.left.name} = ${expr.right.name}`);
               }
               // Handle b3 = {} (object assignment)
-              else if (
-                t.isIdentifier(expr.left) &&
-                t.isObjectExpression(expr.right)
-              ) {
+              else if (t.isIdentifier(expr.left) && t.isObjectExpression(expr.right)) {
                 const objName = expr.left.name;
-                objectPropertiesMap[objName] =
-                  objectPropertiesMap[objName] || {};
-                const propertiesPaths = path.get("expression.right.properties");
+                objectPropertiesMap[objName] = objectPropertiesMap[objName] || {};
+                const propertiesPaths = path.get('expression.right.properties');
                 for (const propPath of propertiesPaths) {
                   const prop = propPath.node;
-                  if (
-                    t.isObjectProperty(prop) &&
-                    (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))
-                  ) {
-                    const propName = t.isStringLiteral(prop.key)
-                      ? prop.key.value
-                      : prop.key.name;
-                    const valuePath = propPath.get("value");
+                  if (t.isObjectProperty(prop) && (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))) {
+                    const propName = t.isStringLiteral(prop.key) ? prop.key.value : prop.key.name;
+                    const valuePath = propPath.get('value');
                     if (valuePath.isFunction()) {
                       objectPropertiesMap[objName][propName] = valuePath.node;
                     } else {
-                      const resolved = resolveFunctionToStringLiteral(
-                        valuePath,
-                        t
-                      );
-                      objectPropertiesMap[objName][propName] =
-                        resolved || valuePath.node;
+                      const resolved = resolveFunctionToStringLiteral(valuePath, t);
+                      objectPropertiesMap[objName][propName] = resolved || valuePath.node;
                     }
-                  } else if (
-                    t.isObjectMethod(prop) &&
-                    (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))
-                  ) {
-                    const propName = t.isStringLiteral(prop.key)
-                      ? prop.key.value
-                      : prop.key.name;
+                  } else if (t.isObjectMethod(prop) && (t.isStringLiteral(prop.key) || t.isIdentifier(prop.key))) {
+                    const propName = t.isStringLiteral(prop.key) ? prop.key.value : prop.key.name;
                     objectPropertiesMap[objName][propName] = prop;
                   }
                 }
               }
-            },
+            }
           });
 
           // Post-process to merge properties from aliased objects
-          const resolveAlias = (name) => {
+          const resolveAlias = name => {
             let currentName = name;
             const seen = new Set();
             while (aliasMap[currentName]) {
@@ -588,19 +533,14 @@ export const findAndExtractKeyPlugin = (api) => {
               if (!objectPropertiesMap[originalName]) {
                 objectPropertiesMap[originalName] = {};
               }
-              debugLoggers.assemblerLogic.log(
-                `Merging properties from alias '${aliasName}' into '${originalName}'`
-              );
-              Object.assign(
-                objectPropertiesMap[originalName],
-                objectPropertiesMap[aliasName]
-              );
+              debugLoggers.assemblerLogic.log(`Merging properties from alias '${aliasName}' into '${originalName}'`);
+              Object.assign(objectPropertiesMap[originalName], objectPropertiesMap[aliasName]);
               delete objectPropertiesMap[aliasName];
             }
           }
 
           // --- Pass 2: Collect Segment Functions & Key Arrays ---
-          debug.log("--- Starting Pass 2: Collecting Functions and Arrays ---");
+          debug.log('--- Starting Pass 2: Collecting Functions and Arrays ---');
 
           // Collect all potential key arrays
           const arrayCollector = new ArrayCollector();
@@ -617,11 +557,11 @@ export const findAndExtractKeyPlugin = (api) => {
           logCollectionResults(segmentFunctionsMap, potentialKeyArrays);
 
           // PASS 3: Extract keys using various patterns
-          debug.log("--- Starting Pass 3: Key Extraction ---");
-          const functionKeyExtractor = new FunctionKeyExtractor(
-            segmentFunctionsMap
-          );
+          debug.log('--- Starting Pass 3: Key Extraction ---');
+          const functionKeyExtractor = new FunctionKeyExtractor(segmentFunctionsMap);
           const arrayJoinExtractor = new ArrayJoinExtractor(potentialKeyArrays);
+          const fromCharCodeExtractor = createFromCharCodeExtractor(foundKeys, nonHexCandidates, wrongLengthCandidates);
+          const sliceExtractor = createSliceExtractor(foundKeys, nonHexCandidates, wrongLengthCandidates);
 
           // --- Configure Extractors ---
           functionKeyExtractor.setTypes(api.types);
@@ -645,21 +585,18 @@ export const findAndExtractKeyPlugin = (api) => {
               wrongLengthCandidates,
               FIND_ALL_CANDIDATES
             ),
+            // Visitor for fromCharCode patterns
+            ...fromCharCodeExtractor,
+            // Visitor for slice patterns
+            ...sliceExtractor
           });
         } else {
-          debug.log(
-            `Direct scan found ${foundKeys.length} keys, skipping standard extraction.`
-          );
+          debug.log(`Direct scan found ${foundKeys.length} keys, skipping standard extraction.`);
           // No need to initialize here as we did at the top level
         }
 
         // Print results
-        printResults(
-          foundKeys,
-          nonHexCandidates,
-          wrongLengthCandidates,
-          FIND_ALL_CANDIDATES
-        );
+        printResults(foundKeys, nonHexCandidates, wrongLengthCandidates, FIND_ALL_CANDIDATES);
 
         // Log summary statistics
         const summary = createExtractionSummary(
@@ -670,9 +607,9 @@ export const findAndExtractKeyPlugin = (api) => {
           potentialKeyArrays
         );
 
-        debugLoggers.performance.log("Extraction Summary:", summary);
-        performanceLogger.timeEnd("Key Extraction Time");
-      },
-    },
+        debugLoggers.performance.log('Extraction Summary:', summary);
+        performanceLogger.timeEnd('Key Extraction Time');
+      }
+    }
   };
 };

@@ -12,7 +12,7 @@ export const DEBUG_CONFIG = {
   ARRAY_JOIN: true,
   CHAR_CODE: true,
   VALIDATION: true,
-  PERFORMANCE: true,
+  PERFORMANCE: true
 };
 
 /**
@@ -44,10 +44,10 @@ export class DebugLogger {
 
 // Pre-configured loggers for different categories
 export const debugLoggers = {
-  segmentFunctions: new DebugLogger("SEGMENT_FUNCTIONS"),
-  assemblerLogic: new DebugLogger("ASSEMBLER_LOGIC"),
-  arrayJoin: new DebugLogger("ARRAY_JOIN"),
-  charCode: new DebugLogger("CHAR_CODE"),
-  validation: new DebugLogger("VALIDATION"),
-  performance: new DebugLogger("PERFORMANCE"),
+  segmentFunctions: new DebugLogger('SEGMENT_FUNCTIONS'),
+  assemblerLogic: new DebugLogger('ASSEMBLER_LOGIC'),
+  arrayJoin: new DebugLogger('ARRAY_JOIN'),
+  charCode: new DebugLogger('CHAR_CODE'),
+  validation: new DebugLogger('VALIDATION'),
+  performance: new DebugLogger('PERFORMANCE')
 };

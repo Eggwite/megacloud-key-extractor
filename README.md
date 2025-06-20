@@ -1,11 +1,11 @@
 # MegaCloud Key Extractor
 
-A Node.js CLI tool to deobfuscate MegaCloud obfuscated JavaScript code and extract the AES encryption key used to secure stream URLs. Built off Ciarands' deobfuscator project, extended to automatically pattern match and fetch the key locally.
+A Node.js CLI tool to deobfuscate MegaCloud obfuscated JavaScript code and extract the AES encryption key used to secure stream URLs, built off Ciaran's deobfuscator project, extended to pattern match and fetch the key locally automatically. A write-up on the development of this plugin can be found [here](https://eggwite.moe/blog/megacloud-key-extraction-analysis)
 
 ## Features
 
 - **Multi-Pass Deobfuscation**: Employs a sophisticated pipeline of Babel plugins to systematically reverse common JavaScript obfuscation techniques.
-- **Advanced Key Extraction**: After deobfuscation, a dedicated plugin analyzes the Abstract Syntax Tree (AST) to identify and extract the AES key using various pattern-matching strategies.
+- **Advanced Key Extraction**: After deobfuscation, a dedicated plugin analyses the Abstract Syntax Tree (AST) to identify and extract the AES key using various pattern-matching strategies.
 - **Modular & Debuggable**: Each transformation pass is a separate, debuggable module, allowing for easier maintenance and analysis of the deobfuscation process.
 - **Control Flow Unflattening**: Reconstructs the original program flow from flattened `while` or `for` loops containing a `switch` statement.
 - **State Machine Solving**: Emulates and resolves obfuscated state machines to simplify the code.
@@ -19,7 +19,7 @@ npm install
 
 ## Usage
 
-  **Extract the key from obfuscated code**
+  **Extract the key from the obfuscated code**
 
 ```bash
 node deobfuscate.js <input-file> [--silent]
@@ -28,7 +28,7 @@ node deobfuscate.js <input-file> [--silent]
    -   `<input-file>`: Path to the obfuscated JavaScript file (default: `input.txt`).
    -   `--silent`: Disable debug logs for a cleaner output.
 
-Or just run the `deobfuscate.js` entry point with the correct input file in-script.
+Or just run the `deobfuscate.js` entry point with the correct input file in the script.
 ``` JS
 //...
 // Process command line arguments
@@ -39,7 +39,7 @@ const inputFile = process.argv[2] || 'input.txt'; // <-- Changeme (if you want)
 
 ## How It Works
 
-The deobfuscator runs the input script through a series of Babel transformations. Each pass simplifies the code further, making it easier for the next pass to analyze.
+The deobfuscator runs the input script through a series of Babel transformations. Each pass simplifies the code further, making it easier for the next pass to analyse.
 
 1.  **Pass 1: Normalization & Unflattening**
     -   `normalizeLiterals`: Simplifies constant expressions (e.g., `1+1` -> `2`).
@@ -94,7 +94,7 @@ The deobfuscator runs the input script through a series of Babel transformations
 
 ## Key Extraction Example
 
-The `findAndExtractKeyPlugin` is designed to find the AES key by recognizing common patterns in the deobfuscated code. Let's walk through a more complex example.
+The `findAndExtractKeyPlugin` is designed to find the AES key by recognising common patterns in the deobfuscated code. Let's walk through a more complex example.
 
 Consider the following simplified snippet of deobfuscated code, which constructs the key from an array of character codes:
 
@@ -125,7 +125,7 @@ The extractor follows these steps:
 
 2.  **Trace the Key Variable**: It then traces the key back to its origin, which is the function `j`.
 
-3.  **Resolve the Key-Generating Function**: The plugin analyzes the AST of the key-generating function (`j`) to determine its return value.
+3.  **Resolve the Key-Generating Function**: The plugin analyses the AST of the key-generating function (`j`) to determine its return value.
 
 4.  **Evaluate the Expression**: Inside `j`, it finds the `return` statement with the expression `String.fromCharCode(...E)`. The extractor is smart enough to resolve this:
     *   It identifies `String.fromCharCode` as a known function it can emulate.
@@ -137,7 +137,7 @@ The resulting key is then printed to the console. This same logic applies to oth
 
 ## Credits
 
-Thanks to the original author [Ciarands](https://github.com/Ciarands/) for the [original script](https://github.com/Ciarands/e1-player-deobf) which this project is based on.
+Thanks to the original author [Ciarands](https://github.com/Ciarands/) for the [original script](https://github.com/Ciarands/e1-player-deobf), which this project is based on.
 
 ## License
 

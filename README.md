@@ -1,5 +1,7 @@
 # MegaCloud Key Extractor
 
+> This script struggles with NEW patterns that are constantly appearing and thus is not guaranteed to work if at all. As of the update to the README, the obfuscated script file has a significantly changed structure. Consider finding a Crypto-JS patch alternative. 
+
 A Node.js CLI tool to deobfuscate MegaCloud obfuscated JavaScript code and extract the AES encryption key used to secure stream URLs, built off Ciaran's deobfuscator project, extended to pattern match and fetch the key locally automatically. A write-up on the development of this plugin can be found [here](https://eggwite.moe/blog/megacloud-key-extraction-analysis)
 
 ## Features
